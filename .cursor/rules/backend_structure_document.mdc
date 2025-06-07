@@ -1,0 +1,186 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+# Backend Structure Document
+
+## 1. Backend Architecture
+
+Overall, the backend is a single Python-based application that handles file uploads, data processing, Excel integration, logging, and the web interface (via Streamlit).
+
+• Design Patterns & Frameworks:
+  - **Layered Structure**: Separate modules for file I/O, data processing, Excel read/write, logging, and UI controllers.
+  - **Service Module**: Core logic (GL aggregation, data matching, validation) lives in a `services` package.
+  - **Utility Module**: Helper functions for fuzzy column matching, folder management, backups in a `utils` package.
+  - **Streamlit**: Orchestrates UI flow, calls service functions directly.
+
+• Scalability:
+  - Stateless processing of each upload; can scale horizontally by running multiple instances behind a load balancer (if deployed on a server).
+  - Core data work uses pandas vector operations for performance.
+
+• Maintainability:
+  - Clear separation of concerns: each module has a single responsibility.
+  - Configuration parameters (folder paths, retention counts) kept in a single config file.
+  - Logging integrated throughout for traceability.
+
+• Performance:
+  - In-memory operations with pandas and openpyxl.
+  - Caches uploaded files temporarily; cleans up after processing.
+
+---
+
+## 2. Database Management
+
+No traditional database is used. All data resides in:
+
+• **Source Excel Files**:
+  - `WIP Report.xlsx` (master template)
+  - `WIP Worksheet.xlsx` (Sage export #1)
+  - `GL Inquiry.xlsx` (Sage export #2)
+
+• **File System Folders**:
+  - `WIP_Backups/`: Timestamped backups of the master report.
+  - `WIP_Logs/`: Audit logs in CSV format.
+
+Data Management Practices:
+  - **Backups**: Before each run, copy `WIP Report.xlsx` into `WIP_Backups` with a timestamped name. Retain the latest 30 backups.
+  - **Logs**: After processing, append a row to a daily CSV in `WIP_Logs/`. Retain logs for 12 months.
+  - **Schema Validation**: Verify required columns exist in each upload; if names vary, apply fuzzy matching.
+
+---
+
+## 3. Database Schema
+
+Since we use file-based storage, here’s the schema for the **audit logs** (CSV files in `WIP_Logs/`):
+
+• **Log File Name**: `YYYY-MM-DD_wip_processing_log.csv`
+• **Columns**:
+  - `timestamp` (MM/DD/YYYY HH:MM:SS) : When the step occurred.
+  - `job_number` (string)          : Job identifier, if applicable.
+  - `action` (string)              : Operation performed (e.g., "GL aggregation", "Backup created").
+  - `status` (string)              : "SUCCESS" or "ERROR".
+  - `details` (string)             : Optional free-text for errors or warnings.
+
+No SQL or NoSQL database is used. All data beyond the Excel files lives in these CSV logs and backup files.
+
+---
+
+## 4. API Design and Endpoints
+
+All interactions happen within the Streamlit app, but conceptually we can think of four key API calls:
+
+1. **POST /upload-files**
+   - Purpose: Receive three Excel files and save them to a temporary folder.
+   - Inputs: `wip_report_file`, `wip_worksheet_file`, `gl_inquiry_file`
+   - Output: File paths for downstream processing.
+
+2. **POST /process-data**
+   - Purpose: Run data aggregation, matching, and validation logic.
+   - Inputs: Paths to the three uploaded files, `month_year`, `include_closed_jobs` flag.
+   - Output: In-memory DataFrames: aggregated GL, merged WIP data, validation summary.
+
+3. **POST /update-excel**
+   - Purpose: Open the master WIP Report, back it up, clear old values, write new values, preserve formulas & formatting.
+   - Inputs: Updated DataFrame for 5040 section, updated DataFrame for 5030 section, target tab name.
+   - Output: Path to the updated `WIP Report.xlsx`.
+
+4. **GET /download-report** and **GET /download-validation**
+   - Purpose: Allow users to download the updated WIP Report and the validation report.
+   - Output: Streamed Excel files.
+
+Internally, Streamlit callbacks map UI buttons to these functions. No external REST server is spun up in MVP.
+
+---
+
+## 5. Hosting Solutions
+
+**MVP Deployment**: Local machine using the Streamlit CLI (`streamlit run app.py`).
+
+**Optional Intranet Deployment**:
+• Host on a dedicated server or VM within company network.
+• Use a process manager (e.g., `systemd` or `pm2`) to keep the app running.
+• Optionally containerize with Docker:
+  - Base image: `python:3.10-slim`
+  - Copy code, install requirements.
+  - Expose port 8501.
+
+Benefits:
+  - **Reliability**: Runs on controlled hardware.
+  - **Scalability**: Can scale horizontally by running multiple container instances behind a basic load balancer.
+  - **Cost-effectiveness**: No cloud fees if existing on-premise infrastructure is used.
+
+---
+
+## 6. Infrastructure Components
+
+• **Streamlit App Server**: Hosts the web UI and backend logic.
+• **File System**:
+  - Folders for uploads, backups, and logs.
+  - Windows folder permissions control access.
+• **Optional Reverse Proxy** (e.g., Nginx):
+  - Terminates HTTPS.
+  - Forwards requests to Streamlit on port 8501.
+• **Caching**:
+  - In-memory caching of uploaded files during a session to speed up repeated operations.
+
+These elements together ensure that the app responds quickly, maintains user data safely, and can serve multiple users if necessary.
+
+---
+
+## 7. Security Measures
+
+• **Authentication & Authorization**:
+  - For MVP, rely on network-level access controls (intranet access only).
+  - Future: Add basic login via Streamlit’s stauth or integrate with company SSO.
+
+• **Data Encryption**:
+  - Use HTTPS if deployed behind a reverse proxy with SSL certificates.
+  - Secure temporary upload folders with OS permissions.
+
+• **Input Validation**:
+  - Verify required columns exist in uploaded files; reject or prompt user if critical data is missing.
+  - Sanitize file names.
+
+• **Audit Trail**:
+  - Every processing step and error is logged in CSV files with timestamps.
+
+• **Backup Permissions**:
+  - `WIP_Backups/` and `WIP_Logs/` inherit Windows folder ACLs to restrict unauthorized access.
+
+---
+
+## 8. Monitoring and Maintenance
+
+• **Logging**:
+  - Python’s standard `logging` module writes both to console and to daily CSV log files.
+  - Logs include debug, info, warning, and error levels.
+
+• **Health Checks**:
+  - Simple script to verify the Streamlit process is running.
+  - Check that backups and logs folders are writable and not full.
+
+• **Backup Rotation**:
+  - Retain only the 30 most recent backups; delete older ones automatically after each run.
+
+• **Log Retention**:
+  - Remove log files older than 12 months via a daily maintenance job (cron or Windows Task Scheduler).
+
+• **Dependency Updates**:
+  - Monthly review of `requirements.txt`; apply security patches for Python libraries.
+
+---
+
+## 9. Conclusion and Overall Backend Summary
+
+This backend design delivers a clear, maintainable, and performant system to automate the WIP report process:
+
+• **Modular Architecture**: Clean separation of file I/O, data processing, Excel integration, UI, and logging.
+• **File-Based Data Management**: Avoids complexity of a full database by using Excel, backups, and CSV logs with defined retention policies.
+• **Preserves Business Logic**: Ensures formulas and formatting in the master report remain intact.
+• **Robust Infrastructure**: Supports local and intranet hosting, with optional containerization and reverse proxy for enterprise readiness.
+• **Strong Security & Audit**: Folder permissions, input validation, HTTPS, and detailed logs guarantee data safety and compliance.
+
+By following this structure, any developer or IT person can understand, deploy, and maintain the backend without ambiguity, and scale or enhance it in future phases (e.g., user authentication, cloud deployment, microservices).

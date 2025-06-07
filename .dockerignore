@@ -1,0 +1,47 @@
+# Virtual environment
+venv/
+env/
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs (will be mounted as volume)
+logs/*.csv
+
+# Temporary files
+*.tmp
+temp_*
+~$*
+
+# Documentation
+*.md
+documentation/
+
+# Backup files (will be mounted as volume)
+WIP_Backups/*.xlsx 

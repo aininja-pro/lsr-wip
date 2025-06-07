@@ -1,0 +1,106 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+Phase 1: Core Data Processing (MVP)
+1. Set up project environment
+   • Create Git repository and initial folder structure
+   • Install Python dependencies (pandas, openpyxl)
+2. Read and validate source files
+   • Load WIP Worksheet, GL Inquiry, and WIP Report (optional) into pandas DataFrames
+   • Verify required columns exist, implement flexible header matching
+3. Implement GL data aggregation
+   • Filter GL Inquiry for 5040, 5030, and 4020 accounts
+   • Compute amount = Debit + Credit
+   • Group by trimmed Job and Account Type (labor/material/billing) and sum
+4. Merge WIP Worksheet with aggregated GL data
+   • Left join on trimmed Job Number
+   • Filter out Closed jobs by default
+5. Output results
+   • Export merged DataFrame to CSV or new Excel
+   • Validate numbers against manual calculation
+   • Write basic unit tests for aggregation and merge logic
+
+Phase 2: Basic Streamlit Interface
+1. Set up Streamlit app scaffold
+   • Create app.py with st.sidebar uploads and selectors
+   • Add file upload widgets for three Excel files
+   • Add month/year date selector (default current)
+2. Display and process data
+   • On Process button click, run Phase 1 logic
+   • Show intermediate DataFrames in st.dataframe
+   • Add download button for CSV results
+3. User feedback
+   • Display processing status and error messages
+   • Write tests to simulate UI file uploads
+
+Phase 3: Excel Integration (Read)
+1. Read existing WIP Report structure
+   • Open WIP Report.xlsx with openpyxl
+   • Identify or create monthly tab named MMM YY
+2. Locate section markers
+   • Search sheet rows for "5040" and "5030" headers
+   • Record start row and column ranges for each section
+3. Detect formulas and data regions
+   • Scan each cell in sections to flag formula vs value
+   • Determine end of data by first blank row
+4. Map existing jobs to rows
+   • Build lookup: Job Number -> row index in 5040 section
+   • Build list of rows for 5030 section
+5. Preview changes
+   • Compare current values to new Phase 1 results
+   • Display side-by-side diff in Streamlit
+
+Phase 4: Excel Integration (Write)
+1. Implement data clearing with formula preservation
+   • Write function clear_data_preserve_formulas(start_row, end_row, columns)
+   • Ensure formatting stays intact
+2. Update value cells only
+   • For each job in merged DataFrame, write to matching row and column
+   • If job not present, append at bottom of section within limits
+3. Preserve formulas and formatting
+   • Do not overwrite cells flagged as formulas
+   • Copy cell styles from template rows for new entries
+4. Save updated workbook
+   • Backup original to WIP_Backups with timestamp
+   • Write changes to monthly tab only
+5. Test end-to-end update
+   • Verify formulas remain functional
+   • Validate that values match merged DataFrame
+
+Phase 5: Validation & Polish
+1. Generate Validation Report
+   • Calculate variances: Actual minus Budget for labor and material
+   • Flag jobs with variance > $1,000
+   • Export separate Excel file with flagged jobs
+2. Enhance error handling and logging
+   • Wrap each processing step with try/except
+   • Log input file checks, row counts, transformations to audit log
+   • Retain logs 12 months
+3. UI improvements
+   • Add "Include Closed Jobs" checkbox
+   • Show summary stats: jobs processed, variances flagged
+   • Add preview-before-update toggle
+4. Documentation
+   • Write user guide for deploying Streamlit app
+   • Document maintenance steps and backup folder structure
+
+Phase 6: Advanced Features (Optional)
+1. Batch processing of multiple months
+   • Allow user to select range of months for update
+2. Scheduling and automation
+   • Integrate with OS scheduler or cron for automated runs
+3. Email notifications
+   • Send completion summary and reports via email
+4. Change tracking and audit
+   • Record before/after snapshots for each update
+   • Provide interface to review historical runs
+
+Quality & Performance
+• Ensure processing of up to 200 jobs completes under 30 seconds
+• Write unit and integration tests for each phase
+• Perform manual and automated QA on sample files
+• Use US formatting standards for currency and dates throughout

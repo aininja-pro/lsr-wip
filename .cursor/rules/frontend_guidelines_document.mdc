@@ -1,0 +1,167 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+# Frontend Guideline Document
+
+This document outlines the frontend setup for our WIP reporting web app. It covers architecture, design principles, styling, component structure, state handling, navigation, performance tips, testing, and a summary. By following these guidelines, anyone—technical or not—can understand how the frontend is built and maintained.
+
+## 1. Frontend Architecture
+
+We’ve chosen Streamlit as our frontend framework. Streamlit lets us build interactive web pages using pure Python, so there’s no separate JavaScript layer to manage. Under the hood, Streamlit uses React and websockets, but we never have to leave Python.
+
+Key points:
+- **Single‐page app**: All UI is defined in one script (`app.py`), which Streamlit serves.  
+- **Python‐centric**: UI components (file uploader, buttons, tables) live alongside data logic (pandas, openpyxl).  
+- **Modular code**: We split code into folders (`ui/`, `processing/`, `utils/`) to keep things tidy.
+
+How this supports our goals:
+- **Scalability**: We can add more screens or split into Streamlit multipage apps easily.  
+- **Maintainability**: Everything is in Python; no context switching. Clear folder structure means new devs find code fast.  
+- **Performance**: Streamlit’s built‐in caching and fast rendering give snappy responses even on moderate data sizes.
+
+## 2. Design Principles
+
+### Usability
+- Keep interactions simple: one upload widget, one process button, clear progress.  
+- Show previews and summaries so users know what’s happening.
+
+### Accessibility
+- Use clear labels on buttons and inputs.  
+- Ensure color contrasts meet basic readability (WCAG AA).  
+- Provide alternative text for any icons or images.
+
+### Responsiveness
+- Design for desktop first, but components (tables, buttons) will adapt in a narrow browser window.  
+- Use Streamlit’s `st.columns()` to lay out side‐by‐side controls that collapse gracefully.
+
+## 3. Styling and Theming
+
+We want a small, sleek, modern look with a clean flat style and subtle glassmorphism touches.
+
+### CSS Methodology
+- We rely on Streamlit’s theme settings in `.streamlit/theme.toml`.  
+- For any custom tweaks, minimal CSS snippets can be injected via `st.markdown(..., unsafe_allow_html=True)`.
+
+### Theming
+- **Primary style**: Flat design with slight translucency on panels (glassmorphism effect).  
+- **Theme file** (`.streamlit/theme.toml`):
+  ```toml
+  [theme]
+  base="light"
+  primaryColor="#2F80ED"
+  backgroundColor="#FFFFFF"
+  secondaryBackgroundColor="#F4F7FA"
+  textColor="#333333"
+  font="sans serif"
+  ```
+
+### Color Palette
+- Primary Blue: #2F80ED  
+- Light Gray: #F4F7FA  
+- Dark Gray Text: #333333  
+- Accent Green (for success): #27AE60  
+- Accent Red (for errors): #EB5757
+
+### Fonts
+- Default sans serif (Streamlit default maps to Open Sans or system font).  
+- Headings can use `font-weight: 600` for clarity.
+
+## 4. Component Structure
+
+We follow a component‐based approach, even within Python scripts:
+
+- `ui/` folder:
+  - `upload.py`: file upload form (Excel inputs).  
+  - `settings.py`: month/year selector, checkboxes.  
+  - `preview.py`: data preview tables.  
+  - `summary.py`: stats display.  
+  - `download.py`: download buttons.
+- `processing/` folder:
+  - `read_data.py`: wrappers for pandas + openpyxl reads.  
+  - `aggregate.py`: GL filtering and grouping logic.  
+  - `merge.py`: join logic with worksheet.  
+  - `write_report.py`: functions to update Excel without overwriting formulas.
+- `utils/`:
+  - `validation.py`: header checks, error messages.  
+  - `logging.py`: audit log writer.
+
+Why component‐based?
+- Each piece has one job and lives in its own file.  
+- Reuse upload or preview code in future screens.  
+- Easier to test and update without side effects.
+
+## 5. State Management
+
+Streamlit uses `st.session_state` to hold data across interactions. We store:
+
+- Uploaded DataFrames: `session_state['wip_report_df']`, `['gl_df']`, `['worksheet_df']`
+- User settings: `session_state['selected_month']`, `['include_closed']`
+- Processing results: `session_state['merged_df']`, `['validation_report']`
+
+Accessing and updating state:
+```python
+if 'merged_df' not in st.session_state:
+    st.session_state.merged_df = None
+...
+st.session_state.merged_df = do_merge(...)
+```
+This ensures the preview and download functions see the latest data without re-running reads.
+
+## 6. Routing and Navigation
+
+Our MVP is a single‐page flow:
+1. Upload files  
+2. Select options  
+3. Preview data  
+4. Process and download
+
+For future multipage needs, Streamlit’s built‐in multipage setup can be used (a `pages/` folder). Alternatively, a simple sidebar radio menu can let users jump between:
+- **Home** (upload + settings)  
+- **Preview**  
+- **Process & Download**
+
+We keep it simple for now, guiding users top‐to‐bottom.
+
+## 7. Performance Optimization
+
+- **Caching**: Use `@st.cache_data` on reading and aggregation functions to avoid re-loading on every UI interaction.  
+- **Lazy Execution**: Only run heavy data processing after the user clicks “Process.”  
+- **Chunked Updates**: For Excel writes, update sections one at a time rather than rewriting the entire workbook.
+- **Asset Minimization**: Avoid embedding large images or assets in the frontend.
+
+These steps help ensure the entire flow completes in under 30 seconds for ~200 jobs.
+
+## 8. Testing and Quality Assurance
+
+### Unit Tests
+- Use `pytest` to test all processing functions (`aggregate.py`, `merge.py`, `validation.py`).  
+- Mock small DataFrames and check outputs match expectations.
+
+### Integration Tests
+- Test end‐to‐end data flow from file read to merged DataFrame.  
+- Use sample Excel files in a `tests/fixtures/` folder.
+
+### UI Tests
+- Use Streamlit’s [test client](https://docs.streamlit.io/library/api-reference/testing) or `selenium` to automate clicking upload, process, and checking the download button appears.
+
+### Code Quality
+- Lint with `flake8`.  
+- Format with `black`.  
+- Enforce type hints with `mypy` (especially on processing functions).
+
+## 9. Conclusion and Overall Frontend Summary
+
+We’re using Streamlit to deliver a clean, Python‐only frontend that meets our goals: fast, intuitive, and accurate WIP reporting. By:
+- Modularizing code into `ui/`, `processing/`, and `utils/`  
+- Following usability, accessibility, and responsiveness best practices  
+- Applying a flat, sleek theme with a clear color palette  
+- Managing state in `st.session_state` and caching heavy calls  
+- Testing thoroughly with pytest and Streamlit’s testing tools
+
+the frontend stays maintainable and scalable. This setup lets finance users upload Excel files, preview results, and get their updated reports in under five minutes—no manual Excel edits required.
+
+Feel free to refer back to this document whenever you need clarity on how the frontend is organized or how to add new features.

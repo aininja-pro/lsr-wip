@@ -1,0 +1,137 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+## Project Overview
+
+* **Type:** Streamlit-based Excel Automation Tool
+* **Description:** Automates the monthly WIP report update process, reducing a 3-hour manual task to under 5 minutes while preserving formulas, formatting, and data accuracy.
+* **Primary Goal:** Automate the monthly WIP report update process from ~3 hours to <5 minutes with full formula and formatting preservation.
+
+## Project Structure
+
+### Framework-Specific Routing
+
+* **Directory Rules:**
+
+    * `streamlit_app.py`: Single-page Streamlit entrypoint; all UI interactions defined here.
+    * `pages/`: (Optional multipage Streamlit, v1.20) each `.py` file under `pages/` defines a separate page.
+    * Example 1: Single-page app → `streamlit_app.py` with widgets for upload, processing, and download.
+    * Example 2: Multipage app → `pages/upload.py`, `pages/process.py`, `pages/preview.py`.
+
+### Core Directories
+
+* **Versioned Structure:**
+
+    * `src/processing`: Core data processing modules (Python 3.9+, pandas 1.5+).
+    * `src/utils`: Utility functions (Excel operations, backups, validation, logging).
+    * `src/ui`: Streamlit UI component definitions and layouts.
+    * `logs`: Audit log CSV files (retain 12 months).
+    * `WIP_Backups`: Timestamped backups of the main WIP Report (retain last 30).
+
+### Key Files
+
+* **Stack-Versioned Patterns:**
+
+    * `streamlit_app.py`: Main Streamlit interface (streamlit 1.20 patterns).
+    * `src/processing/gl_aggregation.py`: GL Inquiry filtering and aggregation logic.
+    * `src/processing/data_merge.py`: Merging WIP Worksheet with aggregated GL data.
+    * `src/utils/excel_utils.py`: `openpyxl` functions for reading/updating Excel, preserving formulas and formatting.
+    * `src/utils/backup.py`: Automated backup routines (`keep_vba=True`, timestamped filenames).
+    * `src/utils/validation_report.py`: Generation of variance report with flags > $1,000.
+    * `logging_config.py`: Configure Python `logging` to CSV with structured fields.
+
+## Tech Stack Rules
+
+* **Version Enforcement:**
+
+    * `python@3.9+`: Use f-strings, type hints, `dataclasses`.
+    * `pandas@1.5`: Vectorized ops; avoid row-wise loops.
+    * `openpyxl@3.0+`: Always load workbooks with `keep_vba=True`; preserve styles.
+    * `streamlit@1.20`: Use `st.cache_data` / `st.cache_resource`; show progress via `st.progress` or `st.spinner`.
+    * `logging` (stdlib): Structured CSV logs; rotate files monthly.
+    * `os`/`pathlib`: Use `Path` objects; ensure directories exist.
+
+## PRD Compliance
+
+* **Non-Negotiable:**
+
+    * "Must detect and NEVER overwrite formula cells in the WIP Report." → Enforce in `excel_utils.clear_data_preserve_formulas`.
+    * "Clear existing data *values only* before writing new data. Stop clearing when reaching empty rows." → Implement region detection and value-only clearing.
+
+## App Flow Integration
+
+* **Stack-Aligned Flow:**
+
+    * Upload files → handled by `streamlit_app.py` `st.file_uploader`.
+    * Select month/year → `st.selectbox` defaulting to current date.
+    * Process → calls `src/processing/etl.py` orchestrator.
+    * Preview changes → `src/ui/preview.py` diff tables.
+    * Write to WIP Report → `src/utils/excel_utils.py`, preserving formulas/formatting.
+    * Generate validation report → `src/utils/validation_report.py` and `st.download_button`.
+    * Download updated reports & view summary statistics in UI.
+
+## Best Practices
+
+* Python
+    * Modularize code into small, testable functions/classes.
+    * Use type hints and run `mypy` for static checks.
+    * Adhere to PEP8/PEP257; run `flake8` and `black`.
+* pandas
+    * Favor vectorized operations; avoid `DataFrame.apply` where possible.
+    * Validate schema and dtypes on load; handle missing columns gracefully.
+    * Use `groupby` + `agg` for performance on large datasets.
+* openpyxl
+    * Always use `workbook = load_workbook(..., keep_vba=True)` for `.xlsm`.
+    * Iterate rows with `values_only=False` to preserve style and formulas.
+    * When writing, set `cell.value` only for non-formula cells.
+* Streamlit
+    * Cache heavy functions with `@st.cache_data` or `@st.cache_resource`.
+    * Provide user feedback via `st.spinner` and `st.progress`.
+    * Structure multi-page apps under `pages/` (v1.20+) if complexity grows.
+* logging
+    * Use a consistent log format including timestamp, level, module, action.
+    * Write logs to daily CSV files under `logs/`; rotate older than 12 months.
+* os / pathlib
+    * Use `Path` for all filesystem paths.
+    * Check and create directories (`mkdir(parents=True, exist_ok=True)`).
+* Cursor (IDE)
+    * Name cursor contexts after key rules (e.g., `preserve_formulas`, `backup_maintenance`).
+    * Keep cursor contexts focused to <10 KB of code.
+
+## Rules
+
+* Derive folder/file patterns **directly** from tech_stack versions.
+* Single-page vs multipage Streamlit must not be mixed; choose `streamlit_app.py` or `pages/` exclusively.
+* Always load `.xlsm` with `keep_vba=True`; never drop macros.
+* Do not clear any formula cell; only clear value cells up to first empty row.
+* Before any write, backup WIP Report to `WIP_Backups/WIP_Report_BACKUP_YYYYMMDD_HHMMSS.xlsx`.
+* Retain only the last 30 backups; delete older ones in `backup.py`.
+* Store audit logs as CSV in `logs/`; purge logs older than 12 months.
+* Support minimal variation in column headers via flexible matching in `excel_utils`.
+
+## Rules Metrics
+
+Before starting the project development, create a metrics file in the root of the project called
+
+`cursor_metrics.md`.
+
+### Instructions:
+
+* Each time a cursor rule is used as context, update `cursor_metrics.md`.
+
+* Use the following format for `cursor_metrics.md`:
+
+# Rules Metrics
+
+## Usage
+The number of times rules is used as context
+
+* preserve_formulas.mdc: 0
+* backup_maintenance.mdc: 0
+* clear_value_cells.mdc: 0
+* load_xlsm_keep_vba.mdc: 0
+* ...other rules

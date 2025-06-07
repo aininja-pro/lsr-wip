@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  wip-automation:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      # Mount local directories for data persistence
+      - ./test_data:/app/test_data:ro  # Read-only access to test data
+      - ./WIP_Backups:/app/WIP_Backups  # Persistent backups
+      - ./logs:/app/logs  # Persistent logs
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    restart: unless-stopped
+    container_name: wip-automation-tool 

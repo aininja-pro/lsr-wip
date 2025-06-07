@@ -1,0 +1,121 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+# Project Requirements Document (PRD)
+
+## 1. Project Overview
+
+This project aims to automate the current three-hour monthly process of updating the Work-in-Progress (WIP) financial report for a construction company. Today, the controller manually copies data from two Sage accounting exports (a WIP Worksheet and a GL Inquiry) into a master Excel file, creating a new monthly tab each period while painstakingly preserving formulas and formatting. The automation tool will ingest the three source files, aggregate and match data by job number, and update the Excel report—backing it up first—without ever overwriting existing formulas or styles.
+
+We’re building this tool to save time, eliminate manual errors, and speed up financial analysis. Key success criteria include reducing report‐generation time from three hours to under five minutes, maintaining 100% data accuracy (compared to manual processing), preserving all formulas and formatting, and producing a separate validation report that flags variances over $1,000. The solution must be easy for non-technical users to run without ongoing IT support.
+
+## 2. In-Scope vs. Out-of-Scope
+
+### In-Scope (Version 1)
+
+*   Upload interface for three Excel files:
+
+    1.  Master WIP Report (`.xlsx` or `.xlsm`)
+    2.  WIP Worksheet export (`.xlsx`)
+    3.  GL Inquiry export (`.xlsx`)
+
+*   Month/year selector (default to current period)
+
+*   Automatic timestamped backup of the master report to a `WIP_Backups/` folder
+
+*   GL data filtering (accounts containing “5040”, “5030”, “4020”), aggregation by job and account type
+
+*   Left-join to WIP Worksheet by trimmed job number; default filter out “Closed” jobs, with an optional override to include them
+
+*   Locate “5040” and “5030” sections in the monthly tab (named `MMM YY`) and update only non-formula cells
+
+*   Preserve all existing formulas, cell formatting (colors, borders, fonts), column widths, print settings, VBA macros, and external links
+
+*   Generate a separate validation report (Excel) that calculates variances (Actual vs. Budget) and flags jobs with variance > $1,000
+
+*   Progress indicator and preview screen showing old vs. new values and variance highlights
+
+*   Audit logging of each run (timestamp, user, files used, jobs processed, issues) stored as monthly CSVs, retained for 12 months
+
+### Out-of-Scope (Planned for Later Phases)
+
+*   Batch processing of multiple months in one run
+*   Email notifications or scheduled automatic runs
+*   Full Excel add-in (ribbon integration) or desktop installer packaging
+*   Automated complex rules for selectively including certain closed jobs beyond a user toggle
+*   Cloud hosting or multi-tenant SaaS deployment
+
+## 3. User Flow
+
+A user opens the Streamlit-based web interface on their local machine. The landing page shows three file-upload widgets labeled “Master WIP Report,” “WIP Worksheet Export,” and “GL Inquiry Export,” plus a month/year dropdown defaulted to the current period. As each file uploads, a green checkmark appears. Below, optional toggles let the user include closed jobs, confirm macro preservation, and enable or disable automatic backups (backups are on by default).
+
+Once files and options are set, the user clicks **Process**. A progress bar shows steps: reading files, validating columns, aggregating GL data, merging with the WIP Worksheet, and preparing updates. Any missing or mismatched columns trigger red-highlighted warnings with instructions to correct or map headers manually. When processing completes, the interface presents a side-by-side preview of existing vs. proposed data in the “5040” and “5030” sections, with formulas shaded and variances flagged.
+
+Satisfied with the preview, the user clicks **Apply Updates**. The tool first creates a timestamped backup, then clears only the old value cells in the master report, writes the new data, and leaves formulas/formats untouched. A confirmation message displays the backup filename and summary stats (jobs processed, variances flagged). Finally, download buttons appear for the updated WIP Report and the validation report. Users can also access an **Audit Log** page to view past runs, filter by date or status, and export logs as CSV.
+
+## 4. Core Features
+
+*   **File Upload & Period Selection**\
+    Allow users to upload three Excel files and pick a month/year (default = current).
+*   **Automated Backups**\
+    Create a timestamped copy of the master report in `WIP_Backups/` before any changes.
+*   **GL Data Aggregation**\
+    Filter GL Inquiry for accounts containing “5040”, “5030”, “4020”; sum Debit + Credit per job/account.
+*   **Data Matching & Filtering**\
+    Trim job numbers; left-join WIP Worksheet with aggregated GL data; default exclude “Closed” jobs.
+*   **Section Detection & Update**\
+    Locate “5040” and “5030” headers in the monthly tab (format `MMM YY`), clear only non-formula cells, and write new values to the correct columns.
+*   **Formula & Format Preservation**\
+    Detect cells containing formulas and never overwrite them; preserve formatting, column widths, print settings, VBA, and links.
+*   **Validation Report Generation**\
+    Produce a separate Excel file listing variances (Actual – Budget) and flag jobs > $1,000.
+*   **Preview & Confirmation**\
+    Show side-by-side comparison of existing vs. new data with variance highlights before final write.
+*   **Audit Logging**\
+    Log each run (timestamp, user, files, jobs processed, validation issues) to monthly CSV files, retained 12 months.
+*   **Error Handling & Column Mapping**\
+    Check for required columns by name (with common header variations); fallback to fuzzy or manual mapping; provide clear error messages.
+
+## 5. Tech Stack & Tools
+
+*   **Language & Frameworks**\
+    Python 3.x, Streamlit (for UI)
+*   **Data Processing**\
+    pandas (DataFrame operations), openpyxl (Excel read/write with `keep_vba=True`)
+*   **Logging & File Management**\
+    Python `logging` module, `os` and `shutil` for backups
+*   **IDE & Integrations**\
+    Cursor (AI-powered coding assistant), VS Code or PyCharm
+*   **Optional Libraries**\
+    fuzzywuzzy or RapidFuzz (for header matching), python-dateutil (date parsing)
+
+## 6. Non-Functional Requirements
+
+*   **Performance**: Process 50–200 jobs in under 30 seconds; handle 5–10 MB files without excessive memory use.
+*   **Security & Compliance**: All data remains local or on the company intranet; use existing Windows folder permissions for file access; retain audit logs for 12 months for financial audit.
+*   **Usability**: Simple, guided UI with progress indicators, preview screens, and clear error messages; non-technical users must run it independently.
+*   **Reliability**: Zero formula overwrites; automatic backups before writes; clear data-only in target regions; log all transformations.
+*   **Maintainability**: Configurable column-mapping dictionary; modular code for data ingestion, processing, and Excel updates; documented functions.
+
+## 7. Constraints & Assumptions
+
+*   Python 3.x environment with required libraries installed (`pandas`, `openpyxl`, `streamlit`).
+*   Master WIP Report follows an Excel template with “5040” and “5030” section headers and formula columns in known relative positions.
+*   Users have read/write access to the folder containing the master report and backups.
+*   Source exports from Sage use stable header names or minor variations that can be auto-mapped.
+*   The tool runs as a local Streamlit app; no external API dependencies.
+
+## 8. Known Issues & Potential Pitfalls
+
+*   **Inconsistent Headers**: Sage exports or WIP Worksheet columns may be renamed—mitigate with a flexible mapping dictionary and manual override.
+*   **Sheet Name Variations**: Existing tabs might use full month names—tool must accept common variations but always create new tabs in `MMM YY` format.
+*   **Formula Detection**: Hidden formulas or cells with empty strings may be misclassified—test with sample workbooks and use `data_only=False` when loading.
+*   **Excel File Locks**: If the master report is open in Excel, write operations will fail—detect and warn the user to close the file first.
+*   **Blank Rows & Ranges**: Clearing data until the first blank row must be robust—stop clearing when hitting truly empty rows (no values, no formulas).
+*   **Memory Constraints**: Very large worksheets could cause high memory use—limit DataFrame scope to used rows/columns and drop intermediate objects promptly.
+
+By following these requirements, the AI model will have a complete and unambiguous reference for generating all subsequent technical deliverables (tech stack docs, frontend/backend guidelines, file structures, etc.) without additional clarification.

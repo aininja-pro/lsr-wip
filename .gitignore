@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Client data and sensitive files
+test_data/
+WIP_Backups/
+logs/
+*.xlsx
+*.xlsm
+*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/ 

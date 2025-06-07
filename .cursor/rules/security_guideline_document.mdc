@@ -1,0 +1,258 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+# Implementation Plan for Automated WIP Report
+
+Below is a phase-wise plan detailing tasks, deliverables, security considerations, and an estimated timeline. This will guide development from MVP through advanced features, ensuring we meet functional, performance, and security requirements.
+
+---
+
+## Phase 1: Core Data Processing (MVP)
+
+### Objectives
+- Read and validate input Excel files
+- Implement GL data aggregation and WIP worksheet merge
+- Export merged results as CSV
+
+### Tasks
+1. **File Ingestion & Validation**
+   - Parse `WIP Worksheet.xlsx`, `GL Inquiry.xlsx` using pandas
+   - Verify presence of required columns (flexible matching)
+   - On missing/renamed columns, log errors and abort with clear message
+2. **GL Aggregation Logic**
+   - Filter accounts containing `5040`, `5030`, `4020`
+   - Compute `Amount = Debit + Credit`
+   - Group by `Job Number` + `Account Type`, sum amounts
+3. **Data Join & Cleanup**
+   - Trim whitespace on `Job Number`
+   - Left-join WIP worksheet to aggregated GL data
+   - Filter out `Status == 'Closed'` by default (configurable)
+   - Fill missing values with zero
+4. **Export Results**
+   - Output merged DataFrame to CSV for verification
+   - Write basic logs (`logging` module)
+
+### Deliverables
+- `process_core.py` with data‐processing functions
+- Sample CSV output
+- Unit tests for aggregation & merge logic
+- Logging configuration (INFO + ERROR)
+
+### Security Considerations
+- Validate and sanitize all file paths using `pathlib`
+- Reject files that exceed size threshold (e.g., >20 MB)
+- Log only metadata (file names, record counts), not PII
+
+### Estimated Duration
+1 week
+
+---
+
+## Phase 2: Basic Streamlit Interface
+
+### Objectives
+- Provide web UI for file uploads and parameter selection
+- Display intermediate tables and CSV download
+
+### Tasks
+1. **Layout & Controls**
+   - Three `st.file_uploader` widgets (xls/xlsx)
+   - Month/Year selector defaulting to current
+   - “Include Closed Jobs” checkbox
+   - “Process” button with progress bar
+2. **Data Preview**
+   - Render pandas DataFrames (`st.dataframe`) after upload
+   - Show summary stats (jobs processed, missing values)
+3. **Download Functionality**
+   - Provide CSV download links for merged data
+4. **Error Handling in UI**
+   - Display friendly error messages without stack traces
+
+### Deliverables
+- `app.py` (Streamlit script)
+- UI screenshots & instruction doc
+- Integration tests for UI flows
+
+### Security Considerations
+- Enforce HTTPS for deployment
+- Sanitize filenames before saving temporarily
+- Limit uploads to trusted types; use secure temp folder with restricted permissions
+
+### Estimated Duration
+1 week
+
+---
+
+## Phase 3: Excel Integration (Read Only)
+
+### Objectives
+- Parse the master WIP report, locate `5040` & `5030` sections
+- Detect formula vs. value cells, preserve formatting metadata
+
+### Tasks
+1. **Open Workbook**
+   - Use `openpyxl` with `keep_vba=True`
+   - Validate workbook integrity
+2. **Locate Sections**
+   - Search for header cells containing “5040” and “5030”
+   - Determine data start row and formula columns (F, G, I, J, etc.)
+3. **Extract Existing Data**
+   - Read values & formulas into DataFrame or structured object
+   - Capture cell styles (fonts, borders, fill, number formats)
+4. **Preview Comparison**
+   - Show side-by-side current vs. new values in UI
+
+### Deliverables
+- `excel_reader.py` module
+- Data structures for cell metadata
+- UI preview component
+
+### Security Considerations
+- Reject macros with suspicious content if not recognized
+- Keep workbooks in memory; avoid writing temp files where possible
+
+### Estimated Duration
+1.5 weeks
+
+---
+
+## Phase 4: Excel Integration (Write Only)
+
+### Objectives
+- Implement `clear_data_preserve_formulas`
+- Update only value cells in appropriate columns, preserve formatting & formulas
+
+### Tasks
+1. **Backup Before Write**
+   - Copy original to `WIP_Backups/WIP_Report_BACKUP_YYYYMMDD_HHMMSS.xlsx`
+2. **Clear Data**
+   - Iterate value-only cells row-wise until first blank row
+   - Do not clear formula cells or styling
+3. **Write New Values**
+   - Insert aggregated labor/material values into the correct columns
+   - Maintain column widths, print areas, and named ranges
+4. **Save Workbook**
+   - Save with `keep_vba=True` to preserve macros
+   - Validate saved file can open without warnings
+
+### Deliverables
+- `excel_writer.py` module
+- End-to-end integration test updating a sample master file
+- Backup folder structure created automatically
+
+### Security Considerations
+- Ensure backup folder has restricted permissions
+- Fail securely if write errors occur (restore from backup)
+
+### Estimated Duration
+2 weeks
+
+---
+
+## Phase 5: Validation & Polish
+
+### Objectives
+- Generate variance report, flagging >$1,000 variances
+- Add robust error handling, logging, and audit trails
+- Expose “Preview Before Update” in UI
+
+### Tasks
+1. **Validation Report**
+   - Compute Actual vs. Budget variances for labor/material
+   - Flag and highlight jobs > $1,000 variance
+   - Export to Excel with formatting
+2. **Audit Logging**
+   - Log every transformation step to `WIP_Processing_Log_YYYY_MM.csv`
+   - Rotate logs monthly, retain 12 months
+3. **Error Handling & Notifications**
+   - Catch exceptions at each layer; roll back changes
+   - Display user-friendly messages; log stack traces internally
+4. **UI Enhancements**
+   - Add “Preview” toggle before applying updates
+   - Show validation report preview
+   - Improve progress feedback and final summary
+
+### Deliverables
+- `validation.py` module
+- Enhanced UI components
+- Comprehensive test suite
+- Updated user guide
+
+### Security Considerations
+- Mask sensitive data in logs
+- Store logs with least privilege
+- Sanitize any user input used in report names
+
+### Estimated Duration
+2 weeks
+
+---
+
+## Phase 6: Advanced Features (Optional)
+
+### Objectives
+- Batch processing, scheduling, email notifications
+- IntrAnet deployment instructions
+
+### Tasks
+1. **Batch & Scheduling**
+   - Command-line interface for multi-month runs
+   - Integrate with Windows Task Scheduler or cron
+2. **Email Notifications**
+   - Send report and logs via secure SMTP with TLS
+   - Template for success/failure notifications
+3. **Deployment Guide**
+   - Steps for intrAnet hosting (IIS, nginx + SSL)
+   - Hardening checklist
+
+### Deliverables
+- `cli.py` and scheduler docs
+- Email module with configuration
+- Deployment and hardening guide
+
+### Security Considerations
+- Store email credentials in vault (or OS key store)
+- Enforce least privilege on service accounts
+
+### Estimated Duration
+2–3 weeks (optional)
+
+---
+
+## Overall Timeline & Milestones
+
+- Phase 1–2 (MVP + UI): 2 weeks
+- Phase 3–4 (Excel R/W): 3.5 weeks
+- Phase 5 (Validation & Polish): 2 weeks
+- Phase 6 (Advanced): 2–3 weeks
+
+Total (to fully polished MVP): ~7.5 weeks
+
+---
+
+## Risk Management & Mitigation
+
+- **Formula Overwrite Risk:**  Extensive unit and integration tests using sample workbooks; snapshot backups
+- **Data Corruption:**  Automatic backups and fail-secure rollback
+- **Performance Bottlenecks:**  Profiling on realistic datasets; optimize pandas and openpyxl loops
+- **Dependency Vulnerabilities:**  Regular SCA scans; lockfiles (`requirements.txt`)
+- **Unauthorized Access:**  Restrictive file permissions; secure sessions on intrAnet
+
+---
+
+## Security & Compliance Summary
+
+Throughout all phases, we will:
+
+- Enforce secure defaults (e.g., HTTPS, secure temp folders)
+- Validate/sanitize all inputs and file operations
+- Limit permissions for file system and network resources
+- Log actions without exposing PII or internals
+- Backup and fail securely on errors
+- Use industry-standard cryptography for any credential storage or email transport
+
+This phased plan ensures that we meet the core goal (sub-5-minute updates) while preserving formulas, formatting, and providing a robust, secure, and user-friendly application.

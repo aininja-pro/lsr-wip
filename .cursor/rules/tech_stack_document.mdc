@@ -1,0 +1,122 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+# Tech Stack Document
+
+This document explains the key technologies chosen for the WIP Report Automation project. It’s written in plain language so anyone—technical or not—can see why we picked each tool and how they work together to automate your monthly WIP report process.
+
+## 1. Frontend Technologies
+
+Our user interface is built with Streamlit, a Python-based web framework that makes it easy to create clean, interactive pages without deep web-dev knowledge.
+
+- **Streamlit**
+  - Provides ready-made UI components (file upload buttons, selectors, progress bars).
+  - Lets us design a simple workflow: choose month/year, upload three Excel files, click “Process,” preview results, and download outputs.
+  - Uses default styling for a modern, minimal look, with options to customize colors and fonts later if needed.
+- **Built-in Streamlit widgets**
+  - File uploader widgets for Excel inputs.
+  - Date and dropdown selectors for month/year.
+  - Buttons and checkboxes for options (e.g., include closed jobs, enable backups).
+- **Inline CSS tweaks (optional)**
+  - Minor adjustments to spacing, font sizes, and colors can be applied via Streamlit’s `st.markdown(…)` with HTML/CSS, keeping the interface small and sleek.
+
+These choices ensure the UI is easy to use, cross-platform (Windows/Mac), and quick to adapt based on user feedback.
+
+## 2. Backend Technologies
+
+All data work—reading Excel files, merging data, preserving formulas, creating backups—happens in Python using a handful of solid libraries.
+
+- **Python** (3.8+)
+  - The core language tying everything together.
+- **pandas**
+  - Reads Excel exports into tables (DataFrames).
+  - Performs filtering, grouping, and summing of GL data (labor, material, billing).
+  - Merges GL aggregates with the WIP Worksheet data.
+- **openpyxl**
+  - Opens the master WIP Report, whether `.xlsx` or `.xlsm`, preserving formulas, formatting, and VBA macros when requested.
+  - Locates the "5040" and "5030" sections by searching cell values.
+  - Clears only the value cells (never overwriting formulas) and writes new figures in place.
+- **logging** (Python standard library)
+  - Records every run into a timestamped CSV log (who ran it, what files were processed, number of jobs, any errors).
+  - Logs are retained for 12 months for audit purposes.
+- **os & pathlib**
+  - Manages file paths, creates backup folders, enforces naming conventions, and handles cleanup of old backups.
+- **(Optional) fuzzy matching library**
+  - In later phases, can help match slightly renamed columns (e.g., “Job #” vs. “JobNumber”).
+
+Together, these backend tools handle the complex data logic while preserving the look and feel of your existing Excel report.
+
+## 3. Infrastructure and Deployment
+
+We opted for a lightweight setup that anyone can run locally or an IT team can deploy on your intranet.
+
+- **Local Streamlit deployment**
+  - Run with a single command: `streamlit run app.py`.
+  - No installer required—just Python and `pip install -r requirements.txt`.
+- **Version control: Git**
+  - All code resides in a Git repository for tracking changes and collaboration.
+- **CI/CD pipelines (optional)**
+  - Can integrate with GitHub Actions or similar to run tests on each commit.
+- **Future options**
+  - **Company intranet hosting**: IT can deploy the Streamlit app on an internal server for multiple users.
+  - **Streamlit Community Cloud**: Free, cloud-hosted option for quick sharing.
+  - **Desktop executable**: Use PyInstaller to package as a Windows `.exe` in later phases.
+
+These infrastructure choices keep the solution simple to start, yet scalable and secure within your organization.
+
+## 4. Third-Party Integrations
+
+This project relies mainly on your existing Excel exports from Sage; there are no payment processors or external analytics tools involved. The integrations are:
+
+- **Sage exports**
+  - WIP Worksheet (budget/estimate data).
+  - GL Inquiry (actuals, billing data).
+  - Our tool reads these files; no direct API calls to Sage.
+- **Excel (.xlsx/.xlsm)**
+  - We support both standard and macro-enabled workbooks, preserving any existing VBA code.
+- **Backup folder**
+  - A local folder (`WIP_Backups/`) holds timestamped copies of your master report before each update.
+
+These simple, file-based integrations keep your data flow transparent and under your control.
+
+## 5. Security and Performance Considerations
+
+We built in measures to protect your data and ensure fast processing.
+
+Security
+- **File permissions**
+  - Backups and logs inherit existing Windows folder security—only authorized finance team members can access them.
+- **No cloud data transfer**
+  - All processing happens on local machines or your intranet; sensitive financial data never leaves your network.
+- **Formula protection**
+  - The tool detects and skips formula cells, preventing accidental overwrites.
+
+Performance
+- **In-memory processing**
+  - pandas works efficiently on 5–10 MB files; 50–200 jobs are handled in under 30 seconds on a typical laptop.
+- **Selective clearing**
+  - Only non-formula cells are cleared and updated, minimizing Excel I/O time.
+- **Incremental backups**
+  - A quick file copy is made before any write, ensuring fast rollback without heavy database overhead.
+
+These safeguards guarantee a smooth, reliable user experience while keeping your data secure.
+
+## 6. Conclusion and Overall Tech Stack Summary
+
+Here’s a quick recap of our technology choices and why they fit the project goals:
+
+- **Streamlit (Frontend)**: Enables a friendly, no-install web interface for file uploads, previews, and downloads.
+- **Python + pandas + openpyxl (Backend)**: Powers the data merging, Excel manipulation, and formula preservation logic.
+- **logging & OS modules**: Provide audit logging, automatic backups, and file-system management.
+- **Git + simple deployment**: Keeps development collaborative and deployment straightforward (locally or on your intranet).
+
+This stack aligns perfectly with the project’s aims:
+- Slashes a 3-hour manual task down to under 5 minutes.
+- Maintains existing Excel formatting, formulas, and macros.
+- Delivers robust error handling, audit logs, and backups for financial compliance.
+
+With these technologies in place, the WIP Report Automation tool is reliable, easy to maintain, and ready to adapt as your processes evolve.
