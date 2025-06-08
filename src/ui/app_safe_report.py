@@ -56,6 +56,9 @@ def process_data(wip_bytes, gl_bytes, include_closed):
             # Load GL inquiry from bytes
             gl_df = pd.read_excel(io.BytesIO(gl_bytes))
             
+            # Log available GL columns to help debug
+            logger.info(f"Available GL Inquiry columns: {list(gl_df.columns)}")
+            
             # Apply column mapping for GL data
             gl_column_variations = {
                 'Account': ['Account', 'Account Number', 'Acct', 'GL Account'],
@@ -77,15 +80,24 @@ def process_data(wip_bytes, gl_bytes, include_closed):
             # Load WIP worksheet from bytes
             wip_df = pd.read_excel(io.BytesIO(wip_bytes))
             
+            # Log available columns to help debug
+            logger.info(f"Available WIP Worksheet columns: {list(wip_df.columns)}")
+            
             # Apply column mapping for WIP worksheet
             wip_column_variations = {
                 'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No'],
                 'Status': ['Status', 'Job Status', 'Project Status', 'State'],
                 'Job Name': ['Job Name', 'Project Name', 'Description', 'Job Description'],
                 'Budget Material': ['Budget Material', 'Material Budget', 'Mat Budget', 'Budget Mat'],
-                'Budget Labor': ['Budget Labor', 'Labor Budget', 'Lab Budget', 'Budget Lab']
+                'Budget Labor': ['Budget Labor', 'Labor Budget', 'Lab Budget', 'Budget Lab'],
+                'Contract Amount': ['Contract Amount', 'Contract Value', 'Total Contract', 'Contract'],
+                'Estimated Sub Labor': ['Estimated Sub Labor', 'Est Sub Labor', 'Sub Labor Budget', 'Sub Labor Est'],
+                'Estimated Material': ['Estimated Material', 'Est Material', 'Material Budget', 'Material Est']
             }
             wip_df = map_columns_flexible(wip_df, wip_column_variations)
+            
+            # Log mapped columns
+            logger.info(f"WIP Worksheet columns after mapping: {list(wip_df.columns)}")
             
             merged_df = merge_wip_with_gl(wip_df, gl_summary, include_closed)
             st.info(f"✅ Merged data for {len(merged_df)} jobs")
@@ -98,65 +110,34 @@ def process_data(wip_bytes, gl_bytes, include_closed):
         return None
 
 def generate_update_reports(merged_df):
-    """Generate separate reports for 5040 (Labor) and 5030 (Material) sections"""
+    """Generate reports with EXACTLY the fields requested"""
     
-    # Debug: Let's see what columns we actually have
-    st.write("**DEBUG: Available columns in merged data:**")
-    st.write(list(merged_df.columns))
-    
-    # Check for GL account fields (5040 = Labor, 5030 = Material)
-    labor_actual_field = None
-    material_actual_field = None
-    
-    # Look for fields that might contain the GL data
-    for col in merged_df.columns:
-        if '5040' in str(col) or 'labor' in str(col).lower():
-            labor_actual_field = col
-            st.write(f"Found potential labor field: {col}")
-        if '5030' in str(col) or 'material' in str(col).lower():
-            material_actual_field = col
-            st.write(f"Found potential material field: {col}")
-    
-    # Show a sample of the data to understand the structure
-    st.write("**DEBUG: Sample of merged data:**")
-    st.write(merged_df.head())
-    
-    # 5040 Section - Labor Report
+    # 5040 Section - Labor Report (4 fields only)
     labor_data = []
     for _, job in merged_df.iterrows():
-        # Try different possible field names for labor actual
-        labor_actual = (
-            job.get('5040', 0) or
-            job.get('Labor Actual', 0) or  
-            job.get(labor_actual_field, 0) if labor_actual_field else 0
-        )
+        labor_actual = job.get('5040', 0) or job.get('Labor Actual', 0) or job.get('Sub Labor', 0)
         
         labor_data.append({
             'Job Number': job.get('Job Number', ''),
-            'Job Name': job.get('Job Name', ''),
-            'Labor Actual': labor_actual,
-            'Labor Budget': job.get('Budget Labor', 0),
-            'Labor Variance': labor_actual - job.get('Budget Labor', 0)
+            'Job Description': job.get('Job Name', job.get('Job Description', '')),
+            'Contract Amount': job.get('Original Contract Amount', 0),  # Using actual column name
+            'Estimated Sub Labor Costs': job.get('Total Subcontract Est', 0),  # Using actual column name
+            'Monthly Sub Labor Costs': labor_actual,
+            'Amount Billed': job.get('4020', 0)  # Using 4020 account data for billing
         })
     
     labor_df = pd.DataFrame(labor_data)
     
-    # 5030 Section - Material Report  
+    # 5030 Section - Material Report (4 fields only)
     material_data = []
     for _, job in merged_df.iterrows():
-        # Try different possible field names for material actual
-        material_actual = (
-            job.get('5030', 0) or
-            job.get('Material Actual', 0) or
-            job.get(material_actual_field, 0) if material_actual_field else 0
-        )
+        material_actual = job.get('5030', 0) or job.get('Material Actual', 0) or job.get('Material', 0)
         
         material_data.append({
             'Job Number': job.get('Job Number', ''),
-            'Job Name': job.get('Job Name', ''),
-            'Material Actual': material_actual,
-            'Material Budget': job.get('Budget Material', 0),
-            'Material Variance': material_actual - job.get('Budget Material', 0)
+            'Job Description': job.get('Job Name', job.get('Job Description', '')),
+            'Estimated Material Costs': job.get('Total Material Estimate', 0),  # Using actual column name
+            'Monthly Material Costs': material_actual
         })
     
     material_df = pd.DataFrame(material_data)
@@ -179,20 +160,31 @@ def create_excel_update_report(labor_df, material_df):
         summary_data = {
             'Section': ['5040 - Labor', '5030 - Material', 'Total'],
             'Jobs Count': [len(labor_df), len(material_df), len(labor_df)],
+            'Total Contract Amount': [
+                labor_df['Contract Amount'].sum(),
+                0,  # Materials don't have contract amount
+                labor_df['Contract Amount'].sum()
+            ],
             'Total Actual': [
-                labor_df['Labor Actual'].sum(), 
-                material_df['Material Actual'].sum(),
-                labor_df['Labor Actual'].sum() + material_df['Material Actual'].sum()
+                labor_df['Monthly Sub Labor Costs'].sum(), 
+                material_df['Monthly Material Costs'].sum(),
+                labor_df['Monthly Sub Labor Costs'].sum() + material_df['Monthly Material Costs'].sum()
             ],
             'Total Budget': [
-                labor_df['Labor Budget'].sum(),
-                material_df['Material Budget'].sum(), 
-                labor_df['Labor Budget'].sum() + material_df['Material Budget'].sum()
+                labor_df['Estimated Sub Labor Costs'].sum(),
+                material_df['Estimated Material Costs'].sum(), 
+                labor_df['Estimated Sub Labor Costs'].sum() + material_df['Estimated Material Costs'].sum()
             ],
             'Total Variance': [
-                labor_df['Labor Variance'].sum(),
-                material_df['Material Variance'].sum(),
-                labor_df['Labor Variance'].sum() + material_df['Material Variance'].sum()
+                labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum(),
+                material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum(),
+                (labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum()) +
+                (material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum())
+            ],
+            'Total Amount Billed': [
+                labor_df['Amount Billed'].sum(),
+                0,  # Only labor section has amount billed
+                labor_df['Amount Billed'].sum()
             ]
         }
         
@@ -210,12 +202,12 @@ def create_excel_update_report(labor_df, material_df):
             "",
             "1. LABOR SECTION (5040):",
             "   - Open the '5040_Labor_Updates' tab in this report",
-            "   - Copy the 'Labor Actual' column values", 
+            "   - Copy the 'Monthly Sub Labor Costs' column values", 
             "   - Paste them into the appropriate column in your WIP Report's 5040 section",
             "",
             "2. MATERIAL SECTION (5030):",
             "   - Open the '5030_Material_Updates' tab in this report",
-            "   - Copy the 'Material Actual' column values",
+            "   - Copy the 'Monthly Material Costs' column values",
             "   - Paste them into the appropriate column in your WIP Report's 5030 section", 
             "",
             "3. VERIFICATION:",
@@ -343,12 +335,12 @@ def main():
                 
                 with col1:
                     st.metric("📊 Total Jobs", len(merged_df))
-                    st.metric("💼 Labor Actual", f"${labor_df['Labor Actual'].sum():,.2f}")
-                    st.metric("📦 Material Actual", f"${material_df['Material Actual'].sum():,.2f}")
+                    st.metric("💼 Labor Actual", f"${labor_df['Monthly Sub Labor Costs'].sum():,.2f}")
+                    st.metric("📦 Material Actual", f"${material_df['Monthly Material Costs'].sum():,.2f}")
                 
                 with col2:
-                    labor_variance = labor_df['Labor Variance'].sum()
-                    material_variance = material_df['Material Variance'].sum()
+                    labor_variance = labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum()
+                    material_variance = material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum()
                     st.metric("📈 Labor Variance", f"${labor_variance:,.2f}")
                     st.metric("📈 Material Variance", f"${material_variance:,.2f}")
                     st.metric("📈 Total Variance", f"${labor_variance + material_variance:,.2f}")

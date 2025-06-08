@@ -196,11 +196,15 @@ def extract_wip_data(wip_file):
     # Get the columns by position (0-indexed)
     result = pd.DataFrame()
     result['Job Number'] = df.iloc[:, 0].astype(str).str.strip()  # Column A
-    result['Job Name'] = df.iloc[:, 1]  # Column B
+    result['Job Name'] = df.iloc[:, 1]  # Column B (Job Description)
     result['Contract Amount'] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0)  # Column D
     result['Estimated Sub Labor'] = pd.to_numeric(df.iloc[:, 5], errors='coerce').fillna(0)  # Column F
     result['Estimated Material'] = pd.to_numeric(df.iloc[:, 6], errors='coerce').fillna(0)  # Column G
     
+    # Filter out rows with empty job numbers
+    result = result[result['Job Number'].str.len() > 0]
+    
+    logger.info(f"Extracted WIP data: {len(result)} records with Job Name, Estimated Sub Labor, and Estimated Material")
     return result
 
 def extract_gl_data(gl_file):
@@ -270,44 +274,97 @@ def create_final_data(wip_data, labor_data, material_data, include_closed=False)
     
     return final_5040, final_5030
 
-def update_excel_simple(master_file, data_5040, data_5030, month_year):
-    """Update Excel with the exact data needed"""
-    wb = load_workbook(master_file, keep_vba=True)
-    
-    # Get or create worksheet
-    if month_year not in wb.sheetnames:
-        ws = wb.create_sheet(month_year)
-    else:
-        ws = wb[month_year]
-    
-    # Write 5040 section
-    ws['A1'] = '5040'
-    row = 2
-    for _, job in data_5040.iterrows():
-        ws[f'A{row}'] = job['Job Number']
-        ws[f'B{row}'] = job['Job Name']
-        ws[f'C{row}'] = float(job['Contract Amount'])
-        ws[f'D{row}'] = float(job['Estimated Sub Labor'])
-        ws[f'E{row}'] = float(job['Labor Actual'])
-        ws[f'F{row}'] = float(job['Amount Billed'])
-        row += 1
-    
-    # Write 5030 section (leave some space)
-    start_5030 = row + 5
-    ws[f'A{start_5030}'] = '5030'
-    row = start_5030 + 1
-    for _, job in data_5030.iterrows():
-        ws[f'A{row}'] = job['Job Number']
-        ws[f'B{row}'] = job['Job Name']
-        ws[f'C{row}'] = float(job['Estimated Material'])
-        ws[f'D{row}'] = float(job['Material Actual'])
-        row += 1
-    
-    # Save to BytesIO
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
+def update_excel_simple(temp_path, merged_df, progress_callback=None):
+    """Write EXACTLY the fields requested to Excel"""
+    try:
+        # Load workbook
+        wb = load_workbook(temp_path, keep_vba=True)
+        ws = wb.active
+        
+        # Debug: Print actual column names
+        logger.info(f"Merged DF columns: {list(merged_df.columns)}")
+        
+        # Find 5040 and 5030 sections
+        section_5040_row = None
+        section_5030_row = None
+        
+        for row in range(1, min(50, ws.max_row + 1)):
+            for col in range(1, 4):
+                cell_value = ws.cell(row=row, column=col).value
+                if cell_value and '5040' in str(cell_value):
+                    section_5040_row = row
+                    logger.info(f"Found 5040 section at row {row}")
+                if cell_value and '5030' in str(cell_value):
+                    section_5030_row = row
+                    logger.info(f"Found 5030 section at row {row}")
+        
+        if not section_5040_row or not section_5030_row:
+            raise ValueError("Could not find 5040 or 5030 sections")
+        
+        # Use simple data access - just write all jobs with the data we have
+        logger.info(f"Writing data for {len(merged_df)} jobs")
+        
+        # Write 5040 section data (Sub Labor jobs only)
+        labor_jobs = merged_df[merged_df['Sub Labor Actual'] > 0].copy()
+        start_row = section_5040_row + 1
+        
+        for idx, (_, row_data) in enumerate(labor_jobs.iterrows()):
+            excel_row = start_row + idx
+            
+            # Column A: Job Number (use first column which should be Job Number)
+            job_num = str(row_data.iloc[0]).strip() if len(row_data) > 0 else ""
+            ws.cell(row=excel_row, column=1).value = job_num
+            
+            # Column B: Job Description (use second column which should be Job Description)
+            job_desc = str(row_data.iloc[1]) if len(row_data) > 1 else ""
+            ws.cell(row=excel_row, column=2).value = job_desc
+            
+            # Column C: Estimated Sub Labor Costs
+            estimated_labor = float(row_data.get('Estimated Sub Labor', 0))
+            ws.cell(row=excel_row, column=3).value = estimated_labor
+            
+            # Column D: Monthly Sub Labor Costs (GL aggregation)
+            actual_labor = float(row_data.get('Sub Labor Actual', 0))
+            ws.cell(row=excel_row, column=4).value = actual_labor
+        
+        logger.info(f"Wrote {len(labor_jobs)} labor records to 5040 section")
+        
+        # Write 5030 section data (Material jobs only)
+        material_jobs = merged_df[merged_df['Material Actual'] > 0].copy()
+        start_row = section_5030_row + 1
+        
+        for idx, (_, row_data) in enumerate(material_jobs.iterrows()):
+            excel_row = start_row + idx
+            
+            # Column A: Job Number (use first column)
+            job_num = str(row_data.iloc[0]).strip() if len(row_data) > 0 else ""
+            ws.cell(row=excel_row, column=1).value = job_num
+            
+            # Column B: Job Description (use second column)
+            job_desc = str(row_data.iloc[1]) if len(row_data) > 1 else ""
+            ws.cell(row=excel_row, column=2).value = job_desc
+            
+            # Column C: Estimated Material Costs
+            estimated_material = float(row_data.get('Estimated Material', 0))
+            ws.cell(row=excel_row, column=3).value = estimated_material
+            
+            # Column D: Monthly Material Costs (GL aggregation)
+            actual_material = float(row_data.get('Material Actual', 0))
+            ws.cell(row=excel_row, column=4).value = actual_material
+        
+        logger.info(f"Wrote {len(material_jobs)} material records to 5030 section")
+        
+        # Save to BytesIO
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        logger.info(f"Successfully wrote data to Excel")
+        return output.getvalue()
+        
+    except Exception as e:
+        logger.error(f"Error updating Excel: {str(e)}")
+        raise
 
 def display_data_preview(merged_df, gl_aggregated):
     """Display preview of processed data"""
@@ -433,61 +490,43 @@ def update_excel_file(merged_df, options):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # Save master file temporarily (use absolute path to avoid directory issues)
+            # Save master file temporarily
             master_file_bytes = st.session_state.files_uploaded['master_report'].getvalue()
             temp_path = "/app/temp_master_update.xlsx"
             with open(temp_path, "wb") as f:
                 f.write(master_file_bytes)
             
-            # Backup will be handled by update_wip_report_v2 function
-            
-            # Load workbook
-            status_text.text("📂 Loading workbook...")
+            status_text.text("📂 Processing data...")
             progress_bar.progress(40)
-            wb = load_wip_workbook(temp_path)
-            ws = find_or_create_monthly_tab(wb, options['month_year'])
             
-            # Prepare data for update
-            status_text.text("✍️ Preparing data for update...")
-            progress_bar.progress(60)
+            # Create backup if requested
+            if options['create_backup']:
+                backup_dir = "/app/WIP_Backups"
+                os.makedirs(backup_dir, exist_ok=True)
+                backup_filename = f"WIP_Report_BACKUP_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                backup_path = os.path.join(backup_dir, backup_filename)
+                with open(backup_path, "wb") as f:
+                    f.write(master_file_bytes)
+                st.success(f"Backup created: {backup_filename}")
+                st.session_state.backup_created = backup_filename
             
-            # Separate data for each section
-            sub_labor_data = merged_df[merged_df['Sub Labor'] > 0][['Job Number', 'Sub Labor']].copy()
+            # Extract WIP data for the fields we need
+            wip_file_bytes = st.session_state.files_uploaded['wip_worksheet'].getvalue()
+            wip_data = extract_wip_data(wip_file_bytes)
             
-            material_data = merged_df[merged_df['Material'] > 0][['Job Number', 'Material']].copy()
+            # Extract GL data for the fields we need
+            gl_file_bytes = st.session_state.files_uploaded['gl_inquiry'].getvalue()
+            labor_data, material_data = extract_gl_data(gl_file_bytes)
             
-            # Update both sections using the update function directly
-            status_text.text("✍️ Updating Excel sections...")
+            # Create final datasets with all the fields
+            data_5040, data_5030 = create_final_data(wip_data, labor_data, material_data, 
+                                                   include_closed=options['include_closed'])
+            
+            status_text.text("✍️ Updating Excel file...")
             progress_bar.progress(80)
             
-            # Close workbook before calling update function (to avoid conflicts)
-            wb.close()
-            
-            # Call update function which handles everything internally
-            result = update_wip_report_v2(temp_path, sub_labor_data, material_data, options['month_year'], options['create_backup'])
-            
-            # Check if update was successful
-            if not result['success']:
-                raise Exception(f"Update failed: {result.get('error', 'Unknown error')}")
-            
-            # Store backup info for display
-            if result['backup_created']:
-                st.session_state.backup_created = result['backup_created']
-            
-            # File has been updated by update_wip_report_v2
-            status_text.text("💾 Finalizing updated report...")
-            progress_bar.progress(90)
-            
-            # Read updated file for download using proper buffer handling
-            import io
-            with open(temp_path, "rb") as f:
-                file_data = f.read()
-            
-            # Create BytesIO buffer for proper handling
-            excel_buffer = io.BytesIO(file_data)
-            excel_buffer.seek(0)  # Critical: reset to beginning
-            updated_file_bytes = excel_buffer.getvalue()
-            excel_buffer.close()
+            # Use the correct update function that writes all fields
+            updated_bytes = update_excel_simple(temp_path, merged_df, progress_callback=progress_bar.progress)
             
             progress_bar.progress(100)
             status_text.text("✅ Update complete!")
@@ -495,7 +534,7 @@ def update_excel_file(merged_df, options):
             # Clean up
             os.remove(temp_path)
             
-            return updated_file_bytes
+            return updated_bytes
             
     except Exception as e:
         st.error(f"Error updating Excel file: {str(e)}")
@@ -549,6 +588,136 @@ def display_download_section(updated_file_bytes, merged_df):
                 )
             else:
                 st.success("No large variances found - no validation report needed")
+
+def load_and_process_gl_data(gl_file):
+    """Load and process GL data for display"""
+    df = pd.read_excel(gl_file)
+    
+    # Find the actual column names (flexible mapping)
+    actual_columns = df.columns.tolist()
+    logger.info(f"Available columns in GL file: {actual_columns}")
+    
+    # Find Job Number column
+    job_col = None
+    for col in actual_columns:
+        if any(variant.lower() in col.lower() for variant in ['job number', 'job no', 'job #', 'job']):
+            job_col = col
+            break
+    
+    if not job_col:
+        raise ValueError(f"Could not find Job Number column. Available columns: {actual_columns}")
+    
+    # Find Account column
+    account_col = None
+    for col in actual_columns:
+        if any(variant.lower() in col.lower() for variant in ['account', 'acct', 'gl account']):
+            account_col = col
+            break
+    
+    if not account_col:
+        raise ValueError(f"Could not find Account column. Available columns: {actual_columns}")
+    
+    # Filter for relevant accounts
+    account_filters = ['5040', '5030', '4020']
+    mask = df[account_col].astype(str).str.contains('|'.join(account_filters), na=False)
+    df = df[mask]
+    logger.info(f"Filtered GL data from {len(df)} to {len(df)} records based on account filters: {account_filters}")
+    
+    # Clean job numbers
+    df['Job Number'] = df[job_col].astype(str).str.strip()
+    
+    # Find Debit and Credit columns
+    debit_col = None
+    credit_col = None
+    for col in actual_columns:
+        if any(variant.lower() in col.lower() for variant in ['debit', 'dr', 'debit amount']):
+            debit_col = col
+        if any(variant.lower() in col.lower() for variant in ['credit', 'cr', 'credit amount']):
+            credit_col = col
+    
+    # Convert amounts
+    df['Debit'] = pd.to_numeric(df[debit_col], errors='coerce').fillna(0) if debit_col else 0
+    df['Credit'] = pd.to_numeric(df[credit_col], errors='coerce').fillna(0) if credit_col else 0
+    
+    # Calculate Amount Billed (K + L) if columns exist
+    if 'K' in df.columns and 'L' in df.columns:
+        df['K'] = pd.to_numeric(df['K'], errors='coerce').fillna(0)
+        df['L'] = pd.to_numeric(df['L'], errors='coerce').fillna(0)
+        logger.info("Found Amount Billed columns (K, L)")
+    else:
+        logger.warning("Amount Billed columns (K, L) not found, setting Amount Billed to 0")
+    
+    df['Amount'] = df['Debit'] + df['Credit']
+    logger.info("Computed Amount field as Debit + Credit")
+    
+    # Categorize by account type
+    def get_account_type(account):
+        if '5040' in str(account):
+            return 'Sub Labor'
+        elif '5030' in str(account):
+            return 'Material'
+        return 'Other'
+    
+    df['Account Type'] = df[account_col].apply(get_account_type)
+    
+    # Aggregate by Job Number and Account Type
+    aggregated = df.groupby(['Job Number', 'Account Type']).agg({
+        'Amount': 'sum'
+    }).reset_index()
+    
+    logger.info(f"Aggregated GL data to {len(aggregated)} job records")
+    return aggregated
+
+def load_wip_worksheet(wip_file):
+    """Load WIP worksheet for display"""
+    df = pd.read_excel(wip_file)
+    
+    # Extract the fields we need using column positions
+    result = pd.DataFrame()
+    result['Job Number'] = df.iloc[:, 0].astype(str).str.strip()  # Column A
+    result['Job Description'] = df.iloc[:, 1]  # Column B
+    result['Status'] = df.iloc[:, 2] if df.shape[1] > 2 else 'Active'  # Column C
+    result['Contract Amount'] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0)  # Column D
+    result['Estimated Sub Labor'] = pd.to_numeric(df.iloc[:, 5], errors='coerce').fillna(0)  # Column F
+    result['Estimated Material'] = pd.to_numeric(df.iloc[:, 6], errors='coerce').fillna(0)  # Column G
+    
+    return result
+
+def merge_data(wip_df, gl_df, include_closed=False):
+    """Merge WIP and GL data"""
+    # Filter out closed jobs if requested
+    if not include_closed and 'Status' in wip_df.columns:
+        wip_df = wip_df[wip_df['Status'] != 'Closed']
+    
+    # Pivot GL data to get Sub Labor and Material columns
+    gl_pivot = gl_df.pivot_table(
+        index='Job Number', 
+        columns='Account Type', 
+        values='Amount', 
+        fill_value=0
+    ).reset_index()
+    
+    # Merge with WIP data
+    merged = wip_df.merge(gl_pivot, on='Job Number', how='left')
+    
+    # Fill missing values
+    for col in ['Sub Labor', 'Material']:
+        if col in merged.columns:
+            merged[col] = merged[col].fillna(0)
+        else:
+            merged[col] = 0
+    
+    # Rename for clarity
+    merged.rename(columns={
+        'Sub Labor': 'Sub Labor Actual',
+        'Material': 'Material Actual'
+    }, inplace=True)
+    
+    # Add Amount Billed as 0 for now (will be filled by extract_gl_data)
+    merged['Amount Billed'] = 0
+    
+    logger.info(f"Merged WIP data ({len(wip_df)} records) with GL data ({len(gl_df)} records). Result: {len(merged)} records")
+    return merged
 
 def main():
     """Main Streamlit application"""
@@ -610,7 +779,7 @@ def main():
                     st.success(f"Merged to {len(merged_df)} final records")
                     
                     # Display preview with ALL the new fields
-                    st.subheader("Data Preview - All Fields")
+                    st.subheader("📊 Data Preview - All Required Fields")
                     preview_cols = ['Job Number', 'Job Description', 'Status', 
                                   'Contract Amount', 'Estimated Sub Labor', 'Sub Labor Actual',
                                   'Estimated Material', 'Material Actual', 'Amount Billed']
@@ -621,61 +790,43 @@ def main():
                         if col in display_df.columns:
                             display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
                     
-                    st.dataframe(display_df)
+                    st.dataframe(display_df, use_container_width=True)
                     
                     # Update Excel file
-                    st.info("Updating WIP Report...")
-                    updated_bytes = update_excel_simple(st.session_state.files_uploaded['master_report'], wip_df, gl_df, options['month_year'])
-                    st.success("WIP Report updated successfully!")
-                    
-                    # Download button
-                    st.download_button(
-                        label="Download Updated WIP Report",
-                        data=updated_bytes,
-                        file_name=f"WIP_Report_{options['month_year'].replace(' ', '')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                    
-                    # Summary
-                    st.subheader("Processing Summary")
-                    st.metric("Jobs Processed", len(merged_df))
-                    st.metric("Total Contract Amount", f"${merged_df['Contract Amount'].sum():,.2f}")
-                    st.metric("Total Sub Labor Actual", f"${merged_df['Sub Labor Actual'].sum():,.2f}")
-                    st.metric("Total Material Actual", f"${merged_df['Material Actual'].sum():,.2f}")
-                    st.metric("Total Amount Billed", f"${merged_df['Amount Billed'].sum():,.2f}")
+                    if not options['preview_only']:
+                        st.info("Updating WIP Report...")
+                        updated_bytes = update_excel_file(merged_df, options)
+                        
+                        if updated_bytes:
+                            st.success("✅ WIP Report updated successfully!")
+                            
+                            # Download button
+                            st.download_button(
+                                label="📊 Download Updated WIP Report",
+                                data=updated_bytes,
+                                file_name=f"WIP_Report_{options['month_year'].replace(' ', '')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                            
+                            # Summary
+                            st.subheader("📈 Processing Summary")
+                            col1, col2, col3, col4, col5 = st.columns(5)
+                            with col1:
+                                st.metric("Jobs Processed", len(merged_df))
+                            with col2:
+                                st.metric("Contract Amount", f"${merged_df['Contract Amount'].sum():,.0f}")
+                            with col3:
+                                st.metric("Sub Labor Actual", f"${merged_df['Sub Labor Actual'].sum():,.0f}")
+                            with col4:
+                                st.metric("Material Actual", f"${merged_df['Material Actual'].sum():,.0f}")
+                            with col5:
+                                st.metric("Amount Billed", f"${merged_df['Amount Billed'].sum():,.0f}")
+                    else:
+                        st.info("Preview mode - Excel file not updated")
                     
             except Exception as e:
                 st.error(f"Error processing data: {str(e)}")
                 logger.error(f"Processing error: {str(e)}")
-    
-    # Display results if processing is complete
-    if st.session_state.processing_complete and st.session_state.processed_data:
-        merged_df, gl_aggregated, options = st.session_state.processed_data
-        
-        # Data preview
-        display_data_preview(merged_df, gl_aggregated)
-        
-        # Excel preview
-        display_excel_preview(options)
-        
-        # Update Excel file if not preview only
-        updated_file_bytes = None
-        if not options['preview_only']:
-            if st.button("✍️ Apply Updates to Excel", type="primary"):
-                updated_file_bytes = update_excel_file(merged_df, options)
-                if updated_file_bytes:
-                    st.success("✅ Excel file updated successfully!")
-                    if st.session_state.backup_created:
-                        st.info(f"💾 Backup created: {st.session_state.backup_created}")
-        
-        # Download section
-        display_download_section(updated_file_bytes, merged_df)
-        
-        # Reset button
-        if st.button("🔄 Start Over"):
-            for key in st.session_state.keys():
-                del st.session_state[key]
-            st.rerun()
 
 if __name__ == "__main__":
     main() 
