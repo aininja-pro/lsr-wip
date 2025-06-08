@@ -19,7 +19,9 @@ COLUMN_MAPPINGS = {
         'Debit': ['Debit', 'Debit Amount', 'DR', 'Dr', 'Debit Amt'],
         'Credit': ['Credit', 'Credit Amount', 'CR', 'Cr', 'Credit Amt'],
         'Description': ['Description', 'Desc', 'Transaction Description', 'GL Description'],
-        'Date': ['Date', 'Transaction Date', 'GL Date', 'Post Date']
+        'Date': ['Date', 'Transaction Date', 'GL Date', 'Post Date'],
+        'Amount Billed K': ['K', 'Column K', 'Billed K', 'Billing K', 'Amount K'],
+        'Amount Billed L': ['L', 'Column L', 'Billed L', 'Billing L', 'Amount L']
     },
     'wip_worksheet': {
         'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No', 'Project'],
@@ -30,7 +32,9 @@ COLUMN_MAPPINGS = {
         'Actual Material': ['Actual Material', 'Material Actual', 'Mat Actual', 'Actual Mat', 'Material To Date'],
         'Actual Labor': ['Actual Labor', 'Labor Actual', 'Lab Actual', 'Actual Lab', 'Labor To Date'],
         'Contract Amount': ['Contract Amount', 'Contract Value', 'Total Contract', 'Contract Total'],
-        'Percent Complete': ['Percent Complete', '% Complete', 'Completion %', 'Progress %']
+        'Percent Complete': ['Percent Complete', '% Complete', 'Completion %', 'Progress %'],
+        'Estimated Sub Labor Costs': ['Estimated Sub Labor Costs', 'Est Sub Labor', 'Sub Labor Estimate', 'Sub Labor Est', 'Estimated Subcontractor Labor'],
+        'Estimated Material Costs': ['Estimated Material Costs', 'Est Material', 'Material Estimate', 'Material Est', 'Estimated Materials']
     },
     'wip_report': {
         'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No'],

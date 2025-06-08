@@ -249,7 +249,7 @@ def safe_write_cell(worksheet: Worksheet, row: int, col: int, value) -> bool:
 
 
 def clear_data_preserve_formulas_5040(worksheet: Worksheet, start_row: int, 
-                                     job_col: int = 1, data_cols: List[int] = [3, 4, 5, 8],
+                                     job_col: int = 1, data_cols: List[int] = [3, 4, 5, 6, 8],
                                      max_rows: int = 200) -> int:
     """
     Clear data in 5040 section while preserving formulas.
@@ -258,7 +258,9 @@ def clear_data_preserve_formulas_5040(worksheet: Worksheet, start_row: int,
         worksheet (Worksheet): The worksheet to modify
         start_row (int): Starting row (section header row)
         job_col (int): Column for job numbers (default: 1 = Column A)
-        data_cols (List[int]): Columns with data to clear (default: [3,4,5,8] = C,D,E,H)
+        data_cols (List[int]): Columns with data to clear 
+                              (default: [3,4,5,6,8] = C,D,E,F,H for Contract Amount, 
+                               Estimated Sub Labor, Sub Labor Actual, Amount Billed, etc.)
         max_rows (int): Maximum rows to process
         
     Returns:
@@ -301,7 +303,7 @@ def clear_data_preserve_formulas_5040(worksheet: Worksheet, start_row: int,
 
 
 def clear_data_preserve_formulas_5030(worksheet: Worksheet, start_row: int,
-                                     desc_col: int = 1, data_cols: List[int] = [2, 3],
+                                     desc_col: int = 1, data_cols: List[int] = [2, 3, 4],
                                      max_rows: int = 200) -> int:
     """
     Clear data in 5030 section while preserving formulas.
@@ -310,7 +312,8 @@ def clear_data_preserve_formulas_5030(worksheet: Worksheet, start_row: int,
         worksheet (Worksheet): The worksheet to modify
         start_row (int): Starting row (section header row)
         desc_col (int): Column for job descriptions (default: 1 = Column A)
-        data_cols (List[int]): Columns with data to clear (default: [2,3] = B,C)
+        data_cols (List[int]): Columns with data to clear 
+                              (default: [2,3,4] = B,C,D for Estimated Material, Material Actual, etc.)
         max_rows (int): Maximum rows to process
         
     Returns:
@@ -353,7 +356,8 @@ def clear_data_preserve_formulas_5030(worksheet: Worksheet, start_row: int,
 
 
 def write_5040_section_data(worksheet: Worksheet, job_data: pd.DataFrame, start_row: int,
-                           job_col: int = 1, amount_col: int = 5) -> int:
+                           job_col: int = 1, contract_col: int = 3, est_sub_labor_col: int = 4, 
+                           sub_labor_col: int = 5, amount_billed_col: int = 6) -> int:
     """
     Write Sub Labor data to the 5040 section.
     
@@ -362,36 +366,65 @@ def write_5040_section_data(worksheet: Worksheet, job_data: pd.DataFrame, start_
         job_data (pd.DataFrame): DataFrame with Sub Labor data
         start_row (int): Starting row of the section
         job_col (int): Column for job numbers (default: 1 = Column A)
-        amount_col (int): Column for amounts (default: 5 = Column E)
+        contract_col (int): Column for Contract Amount (default: 3 = Column C)
+        est_sub_labor_col (int): Column for Estimated Sub Labor Costs (default: 4 = Column D)
+        sub_labor_col (int): Column for Sub Labor Actual (default: 5 = Column E)
+        amount_billed_col (int): Column for Amount Billed (default: 6 = Column F)
         
     Returns:
         int: Number of jobs written
     """
     jobs_written = 0
     
-    # Filter for jobs with Sub Labor amounts
-    sub_labor_jobs = job_data[job_data['Sub Labor'] != 0].copy() if 'Sub Labor' in job_data.columns else pd.DataFrame()
+    # Filter for jobs with any relevant data
+    relevant_jobs = job_data[
+        (job_data.get('Sub Labor', 0) != 0) |
+        (job_data.get('Contract Amount', 0) != 0) |
+        (job_data.get('Estimated Sub Labor Costs', 0) != 0) |
+        (job_data.get('Amount Billed', 0) != 0)
+    ].copy() if len(job_data) > 0 else pd.DataFrame()
     
-    if sub_labor_jobs.empty:
-        logging.info("No Sub Labor data to write to 5040 section")
+    if relevant_jobs.empty:
+        logging.info("No 5040 section data to write")
         return 0
     
     # Write each job's data starting from row after header
-    for idx, (_, row) in enumerate(sub_labor_jobs.iterrows()):
+    for idx, (_, row) in enumerate(relevant_jobs.iterrows()):
         current_row = start_row + 1 + idx
+        job_written = False
         
         # Write job number in Column A
         if safe_write_cell(worksheet, current_row, job_col, row['Job Number']):
-            # Write Sub Labor amount in specified column (default Column E)
-            if safe_write_cell(worksheet, current_row, amount_col, row['Sub Labor']):
-                jobs_written += 1
+            
+            # Write Contract Amount (Column C/D based on WIP Worksheet)
+            if 'Contract Amount' in row and pd.notna(row['Contract Amount']) and row['Contract Amount'] != 0:
+                if safe_write_cell(worksheet, current_row, contract_col, row['Contract Amount']):
+                    job_written = True
+            
+            # Write Estimated Sub Labor Costs (Column F from WIP Worksheet)
+            if 'Estimated Sub Labor Costs' in row and pd.notna(row['Estimated Sub Labor Costs']) and row['Estimated Sub Labor Costs'] != 0:
+                if safe_write_cell(worksheet, current_row, est_sub_labor_col, row['Estimated Sub Labor Costs']):
+                    job_written = True
+            
+            # Write Sub Labor Actual amount (from GL aggregation)
+            if 'Sub Labor' in row and pd.notna(row['Sub Labor']) and row['Sub Labor'] != 0:
+                if safe_write_cell(worksheet, current_row, sub_labor_col, row['Sub Labor']):
+                    job_written = True
+            
+            # Write Amount Billed (Sum of K&L from GL Inquiry)
+            if 'Amount Billed' in row and pd.notna(row['Amount Billed']) and row['Amount Billed'] != 0:
+                if safe_write_cell(worksheet, current_row, amount_billed_col, row['Amount Billed']):
+                    job_written = True
+        
+        if job_written:
+            jobs_written += 1
     
-    logging.info(f"Wrote {jobs_written} Sub Labor jobs to 5040 section")
+    logging.info(f"Wrote {jobs_written} jobs to 5040 section")
     return jobs_written
 
 
 def write_5030_section_data(worksheet: Worksheet, job_data: pd.DataFrame, start_row: int,
-                           desc_col: int = 1, amount_col: int = 3) -> int:
+                           desc_col: int = 1, est_material_col: int = 2, material_col: int = 3) -> int:
     """
     Write Material data to the 5030 section.
     
@@ -400,15 +433,19 @@ def write_5030_section_data(worksheet: Worksheet, job_data: pd.DataFrame, start_
         job_data (pd.DataFrame): DataFrame with Material data
         start_row (int): Starting row of the section
         desc_col (int): Column for job descriptions (default: 1 = Column A)
-        amount_col (int): Column for amounts (default: 3 = Column C)
+        est_material_col (int): Column for Estimated Material Costs (default: 2 = Column B)
+        material_col (int): Column for Material Actual (default: 3 = Column C)
         
     Returns:
         int: Number of jobs written
     """
     jobs_written = 0
     
-    # Filter for jobs with Material amounts
-    material_jobs = job_data[job_data['Material'] != 0].copy() if 'Material' in job_data.columns else pd.DataFrame()
+    # Filter for jobs with Material amounts or Estimated Material Costs
+    material_jobs = job_data[
+        (job_data.get('Material', 0) != 0) |
+        (job_data.get('Estimated Material Costs', 0) != 0)
+    ].copy() if len(job_data) > 0 else pd.DataFrame()
     
     if material_jobs.empty:
         logging.info("No Material data to write to 5030 section")
@@ -417,13 +454,24 @@ def write_5030_section_data(worksheet: Worksheet, job_data: pd.DataFrame, start_
     # Write each job's data starting from row after header
     for idx, (_, row) in enumerate(material_jobs.iterrows()):
         current_row = start_row + 1 + idx
+        job_written = False
         
         # Write job description in Column A
         description = row.get('Job Name', row['Job Number'])
         if safe_write_cell(worksheet, current_row, desc_col, description):
-            # Write Material amount in specified column (default Column C)
-            if safe_write_cell(worksheet, current_row, amount_col, row['Material']):
-                jobs_written += 1
+            
+            # Write Estimated Material Costs (Column G from WIP Worksheet)
+            if 'Estimated Material Costs' in row and pd.notna(row['Estimated Material Costs']) and row['Estimated Material Costs'] != 0:
+                if safe_write_cell(worksheet, current_row, est_material_col, row['Estimated Material Costs']):
+                    job_written = True
+            
+            # Write Material Actual amount (from GL aggregation)
+            if 'Material' in row and pd.notna(row['Material']) and row['Material'] != 0:
+                if safe_write_cell(worksheet, current_row, material_col, row['Material']):
+                    job_written = True
+        
+        if job_written:
+            jobs_written += 1
     
     logging.info(f"Wrote {jobs_written} Material jobs to 5030 section")
     return jobs_written

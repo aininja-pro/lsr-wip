@@ -8,6 +8,7 @@ and merging with aggregated GL data. It also handles filtering of closed jobs.
 import pandas as pd
 import logging
 from typing import Optional, Dict, List
+from .column_mapping import map_dataframe_columns, validate_required_columns
 
 
 def load_wip_worksheet(file_path: str) -> pd.DataFrame:
@@ -28,35 +29,17 @@ def load_wip_worksheet(file_path: str) -> pd.DataFrame:
         # Load the Excel file
         df = pd.read_excel(file_path)
         
-        # Check for required columns (with common variations)
-        column_variations = {
-            'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No'],
-            'Status': ['Status', 'Job Status', 'Project Status', 'State'],
-            'Job Name': ['Job Name', 'Project Name', 'Description', 'Job Description'],
-            'Budget Material': ['Budget Material', 'Material Budget', 'Mat Budget', 'Budget Mat'],
-            'Budget Labor': ['Budget Labor', 'Labor Budget', 'Lab Budget', 'Budget Lab'],
-            'Actual Material': ['Actual Material', 'Material Actual', 'Mat Actual', 'Actual Mat'],
-            'Actual Labor': ['Actual Labor', 'Labor Actual', 'Lab Actual', 'Actual Lab']
-        }
+        # Use the standardized column mapping approach
+        # Map columns to standard names
+        df = map_dataframe_columns(df, 'wip_worksheet')
         
-        # Map column names to standard names
-        column_mapping = {}
-        for standard_name, variations in column_variations.items():
-            found_column = None
-            for variation in variations:
-                if variation in df.columns:
-                    found_column = variation
-                    break
-            
-            if found_column:
-                column_mapping[found_column] = standard_name
-            else:
-                # Some columns might be optional, only require Job Number and Status
-                if standard_name in ['Job Number', 'Status']:
-                    raise ValueError(f"Required column '{standard_name}' not found. Available columns: {list(df.columns)}")
+        # Validate required columns
+        required_columns = ['Job Number', 'Status']
+        column_mapping = {col: col for col in df.columns}  # Identity mapping after standardization
+        is_valid, missing_columns = validate_required_columns('wip_worksheet', column_mapping, required_columns)
         
-        # Rename columns to standard names
-        df = df.rename(columns=column_mapping)
+        if not is_valid:
+            raise ValueError(f"Required columns missing: {missing_columns}. Available columns: {list(df.columns)}")
         
         logging.info(f"Successfully loaded WIP Worksheet file with {len(df)} records")
         return df
@@ -134,7 +117,7 @@ def merge_wip_with_gl(wip_df: pd.DataFrame, gl_df: pd.DataFrame,
     
     # Fill missing GL values with 0 if requested
     if fill_missing_with_zero:
-        gl_columns = ['Material', 'Sub Labor', 'Other']
+        gl_columns = ['Material', 'Sub Labor', 'Other', 'Amount Billed']
         for col in gl_columns:
             if col in merged_df.columns:
                 merged_df[col] = merged_df[col].fillna(0)

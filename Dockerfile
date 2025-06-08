@@ -30,4 +30,4 @@ ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
 # Command to run the application
-CMD ["streamlit", "run", "src/ui/app_memory_fix.py", "--server.port=8501", "--server.address=0.0.0.0"] 
+CMD ["streamlit", "run", "src/ui/app_safe_report.py", "--server.port=8501", "--server.address=0.0.0.0"] 

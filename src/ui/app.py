@@ -5,6 +5,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 import io
+import numpy as np
+from io import BytesIO
+from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+import logging
 
 # Add the src directory to the path so we can import our modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -24,6 +29,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Custom CSS for better styling
 st.markdown("""
@@ -180,56 +189,125 @@ def display_processing_options():
         'create_backup': create_backup
     }
 
-def process_data(options):
-    """Process the uploaded data"""
-    try:
-        with st.spinner("Processing data..."):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Step 1: Load and validate files
-            status_text.text("📊 Loading GL Inquiry data...")
-            progress_bar.progress(10)
-            
-            gl_df = pd.read_excel(st.session_state.files_uploaded['gl_inquiry'])
-            gl_df = map_dataframe_columns(gl_df, 'gl_inquiry')
-            
-            status_text.text("📋 Loading WIP Worksheet data...")
-            progress_bar.progress(20)
-            
-            wip_df = pd.read_excel(st.session_state.files_uploaded['wip_worksheet'])
-            wip_df = map_dataframe_columns(wip_df, 'wip_worksheet')
-            
-            # Step 2: Aggregate GL data
-            status_text.text("🔄 Aggregating GL data by job and account type...")
-            progress_bar.progress(40)
-            
-            gl_aggregated = aggregate_gl_data(gl_df)
-            
-            # Step 3: Merge data
-            status_text.text("🔗 Merging WIP data with GL actuals...")
-            progress_bar.progress(60)
-            
-            # Save WIP file temporarily for processing (use absolute path)
-            temp_wip_path = "/app/temp_wip_processing.xlsx"
-            wip_df.to_excel(temp_wip_path, index=False)
-            merged_df = process_wip_merge(temp_wip_path, gl_aggregated, include_closed=options['include_closed'])
-            os.remove(temp_wip_path)  # Clean up
-            
-            # Step 4: Compute variances
-            status_text.text("📈 Computing variances...")
-            progress_bar.progress(80)
-            
-            final_df = compute_variances(merged_df)
-            
-            progress_bar.progress(100)
-            status_text.text("✅ Processing complete!")
-            
-            return final_df, gl_aggregated
-            
-    except Exception as e:
-        st.error(f"Error during processing: {str(e)}")
-        return None, None
+def extract_wip_data(wip_file):
+    """Extract the exact fields we need from WIP Worksheet"""
+    df = pd.read_excel(wip_file)
+    
+    # Get the columns by position (0-indexed)
+    result = pd.DataFrame()
+    result['Job Number'] = df.iloc[:, 0].astype(str).str.strip()  # Column A
+    result['Job Name'] = df.iloc[:, 1]  # Column B
+    result['Contract Amount'] = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(0)  # Column D
+    result['Estimated Sub Labor'] = pd.to_numeric(df.iloc[:, 5], errors='coerce').fillna(0)  # Column F
+    result['Estimated Material'] = pd.to_numeric(df.iloc[:, 6], errors='coerce').fillna(0)  # Column G
+    
+    return result
+
+def extract_gl_data(gl_file):
+    """Extract Labor Actual, Material Actual, and Amount Billed from GL"""
+    df = pd.read_excel(gl_file)
+    
+    # Filter for relevant accounts
+    account_filters = ['5040', '5030', '4020']
+    mask = df['Account'].astype(str).str.contains('|'.join(account_filters), na=False)
+    df = df[mask]
+    
+    # Clean job numbers
+    df['Job Number'] = df['Job Number'].astype(str).str.strip()
+    
+    # Convert amounts
+    df['Debit'] = pd.to_numeric(df['Debit'], errors='coerce').fillna(0)
+    df['Credit'] = pd.to_numeric(df['Credit'], errors='coerce').fillna(0)
+    df['Amount'] = df['Debit'] + df['Credit']
+    
+    # Calculate Amount Billed (K + L)
+    amount_billed = 0
+    if 'K' in df.columns and 'L' in df.columns:
+        df['K'] = pd.to_numeric(df['K'], errors='coerce').fillna(0)
+        df['L'] = pd.to_numeric(df['L'], errors='coerce').fillna(0)
+        amount_billed = df['K'] + df['L']
+    df['Amount Billed'] = amount_billed
+    
+    # Categorize by account type
+    def get_account_type(account):
+        if '5040' in str(account):
+            return 'Labor'
+        elif '5030' in str(account):
+            return 'Material'
+        return 'Other'
+    
+    df['Account Type'] = df['Account'].apply(get_account_type)
+    
+    # Aggregate by Job Number and Account Type
+    labor_data = df[df['Account Type'] == 'Labor'].groupby('Job Number').agg({
+        'Amount': 'sum',
+        'Amount Billed': 'sum'
+    }).reset_index()
+    labor_data.rename(columns={'Amount': 'Labor Actual'}, inplace=True)
+    
+    material_data = df[df['Account Type'] == 'Material'].groupby('Job Number').agg({
+        'Amount': 'sum'
+    }).reset_index()
+    material_data.rename(columns={'Amount': 'Material Actual'}, inplace=True)
+    
+    return labor_data, material_data
+
+def create_final_data(wip_data, labor_data, material_data, include_closed=False):
+    """Combine all data for final output"""
+    
+    # Filter out closed jobs if requested
+    if not include_closed and 'Status' in wip_data.columns:
+        wip_data = wip_data[wip_data['Status'] != 'Closed']
+    
+    # Merge with labor data
+    final_5040 = wip_data.merge(labor_data, on='Job Number', how='left')
+    final_5040['Labor Actual'] = final_5040['Labor Actual'].fillna(0)
+    final_5040['Amount Billed'] = final_5040['Amount Billed'].fillna(0)
+    
+    # Merge with material data  
+    final_5030 = wip_data.merge(material_data, on='Job Number', how='left')
+    final_5030['Material Actual'] = final_5030['Material Actual'].fillna(0)
+    
+    return final_5040, final_5030
+
+def update_excel_simple(master_file, data_5040, data_5030, month_year):
+    """Update Excel with the exact data needed"""
+    wb = load_workbook(master_file, keep_vba=True)
+    
+    # Get or create worksheet
+    if month_year not in wb.sheetnames:
+        ws = wb.create_sheet(month_year)
+    else:
+        ws = wb[month_year]
+    
+    # Write 5040 section
+    ws['A1'] = '5040'
+    row = 2
+    for _, job in data_5040.iterrows():
+        ws[f'A{row}'] = job['Job Number']
+        ws[f'B{row}'] = job['Job Name']
+        ws[f'C{row}'] = float(job['Contract Amount'])
+        ws[f'D{row}'] = float(job['Estimated Sub Labor'])
+        ws[f'E{row}'] = float(job['Labor Actual'])
+        ws[f'F{row}'] = float(job['Amount Billed'])
+        row += 1
+    
+    # Write 5030 section (leave some space)
+    start_5030 = row + 5
+    ws[f'A{start_5030}'] = '5030'
+    row = start_5030 + 1
+    for _, job in data_5030.iterrows():
+        ws[f'A{row}'] = job['Job Number']
+        ws[f'B{row}'] = job['Job Name']
+        ws[f'C{row}'] = float(job['Estimated Material'])
+        ws[f'D{row}'] = float(job['Material Actual'])
+        row += 1
+    
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
 
 def display_data_preview(merged_df, gl_aggregated):
     """Display preview of processed data"""
@@ -516,12 +594,59 @@ def main():
         
         # Process button
         if st.button("🚀 Process Data", type="primary", use_container_width=True):
-            merged_df, gl_aggregated = process_data(options)
-            
-            if merged_df is not None:
-                st.session_state.processed_data = (merged_df, gl_aggregated, options)
-                st.session_state.processing_complete = True
-                st.rerun()
+            try:
+                with st.spinner("Processing data..."):
+                    # Load and process data
+                    st.info("Loading GL Inquiry data...")
+                    gl_df = load_and_process_gl_data(st.session_state.files_uploaded['gl_inquiry'])
+                    st.success(f"Processed {len(gl_df)} GL records")
+                    
+                    st.info("Loading WIP Worksheet data...")
+                    wip_df = load_wip_worksheet(st.session_state.files_uploaded['wip_worksheet'])
+                    st.success(f"Loaded {len(wip_df)} WIP records")
+                    
+                    st.info("Merging data...")
+                    merged_df = merge_data(wip_df, gl_df, include_closed=options['include_closed'])
+                    st.success(f"Merged to {len(merged_df)} final records")
+                    
+                    # Display preview with ALL the new fields
+                    st.subheader("Data Preview - All Fields")
+                    preview_cols = ['Job Number', 'Job Description', 'Status', 
+                                  'Contract Amount', 'Estimated Sub Labor', 'Sub Labor Actual',
+                                  'Estimated Material', 'Material Actual', 'Amount Billed']
+                    
+                    display_df = merged_df[preview_cols].copy()
+                    for col in ['Contract Amount', 'Estimated Sub Labor', 'Sub Labor Actual', 
+                               'Estimated Material', 'Material Actual', 'Amount Billed']:
+                        if col in display_df.columns:
+                            display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
+                    
+                    st.dataframe(display_df)
+                    
+                    # Update Excel file
+                    st.info("Updating WIP Report...")
+                    updated_bytes = update_excel_simple(st.session_state.files_uploaded['master_report'], wip_df, gl_df, options['month_year'])
+                    st.success("WIP Report updated successfully!")
+                    
+                    # Download button
+                    st.download_button(
+                        label="Download Updated WIP Report",
+                        data=updated_bytes,
+                        file_name=f"WIP_Report_{options['month_year'].replace(' ', '')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    
+                    # Summary
+                    st.subheader("Processing Summary")
+                    st.metric("Jobs Processed", len(merged_df))
+                    st.metric("Total Contract Amount", f"${merged_df['Contract Amount'].sum():,.2f}")
+                    st.metric("Total Sub Labor Actual", f"${merged_df['Sub Labor Actual'].sum():,.2f}")
+                    st.metric("Total Material Actual", f"${merged_df['Material Actual'].sum():,.2f}")
+                    st.metric("Total Amount Billed", f"${merged_df['Amount Billed'].sum():,.2f}")
+                    
+            except Exception as e:
+                st.error(f"Error processing data: {str(e)}")
+                logger.error(f"Processing error: {str(e)}")
     
     # Display results if processing is complete
     if st.session_state.processing_complete and st.session_state.processed_data:

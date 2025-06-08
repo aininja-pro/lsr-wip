@@ -387,8 +387,7 @@ def update_excel_file_memory_only(merged_df, options):
                 master_buffer, 
                 keep_vba=True,        # Preserve VBA macros
                 data_only=False,      # CRITICAL: Keep formulas, not just values
-                keep_links=True,      # Preserve external links
-                rich_text=True        # Preserve rich text formatting (CORRECT PARAM NAME)
+                keep_links=True       # Preserve external links
             )
             master_buffer.close()
             
@@ -537,8 +536,7 @@ def update_excel_file_memory_only(merged_df, options):
                     test_buffer, 
                     keep_vba=True, 
                     data_only=False, 
-                    keep_links=True, 
-                    rich_text=True
+                    keep_links=True
                 )
                 test_buffer.close()
                 

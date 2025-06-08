@@ -9,6 +9,7 @@ aggregated amounts by job number and account type.
 import pandas as pd
 import logging
 from typing import Dict, List, Optional
+from .column_mapping import map_dataframe_columns, validate_required_columns
 
 
 def load_gl_inquiry(file_path: str) -> pd.DataFrame:
@@ -29,31 +30,16 @@ def load_gl_inquiry(file_path: str) -> pd.DataFrame:
         # Load the Excel file
         df = pd.read_excel(file_path)
         
-        # Check for required columns (with common variations)
+        # Use the standardized column mapping approach
+        df = map_dataframe_columns(df, 'gl_inquiry')
+        
+        # Validate required columns
         required_columns = ['Account', 'Job Number', 'Debit', 'Credit']
-        column_variations = {
-            'Account': ['Account', 'Account Number', 'Acct', 'GL Account'],
-            'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number'],
-            'Debit': ['Debit', 'Debit Amount', 'DR', 'Dr'],
-            'Credit': ['Credit', 'Credit Amount', 'CR', 'Cr']
-        }
+        column_mapping = {col: col for col in df.columns}  # Identity mapping after standardization
+        is_valid, missing_columns = validate_required_columns('gl_inquiry', column_mapping, required_columns)
         
-        # Map column names to standard names
-        column_mapping = {}
-        for standard_name, variations in column_variations.items():
-            found_column = None
-            for variation in variations:
-                if variation in df.columns:
-                    found_column = variation
-                    break
-            
-            if found_column:
-                column_mapping[found_column] = standard_name
-            else:
-                raise ValueError(f"Required column '{standard_name}' not found. Available columns: {list(df.columns)}")
-        
-        # Rename columns to standard names
-        df = df.rename(columns=column_mapping)
+        if not is_valid:
+            raise ValueError(f"Required columns missing: {missing_columns}. Available columns: {list(df.columns)}")
         
         logging.info(f"Successfully loaded GL Inquiry file with {len(df)} records")
         return df
@@ -92,13 +78,13 @@ def filter_gl_accounts(df: pd.DataFrame, account_filters: List[str] = None) -> p
 
 def compute_amounts(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute the Amount field as Debit + Credit for each record.
+    Compute the Amount field as Debit + Credit and Amount Billed as K + L for each record.
     
     Args:
-        df (pd.DataFrame): GL data with Debit and Credit columns
+        df (pd.DataFrame): GL data with Debit, Credit, and billing columns
         
     Returns:
-        pd.DataFrame: GL data with computed Amount column
+        pd.DataFrame: GL data with computed Amount and Amount Billed columns
     """
     # Fill NaN values with 0 for numeric calculations
     df['Debit'] = pd.to_numeric(df['Debit'], errors='coerce').fillna(0)
@@ -106,6 +92,16 @@ def compute_amounts(df: pd.DataFrame) -> pd.DataFrame:
     
     # Compute Amount = Debit + Credit
     df['Amount'] = df['Debit'] + df['Credit']
+    
+    # Compute Amount Billed = K + L (if these columns exist)
+    if 'Amount Billed K' in df.columns and 'Amount Billed L' in df.columns:
+        df['Amount Billed K'] = pd.to_numeric(df['Amount Billed K'], errors='coerce').fillna(0)
+        df['Amount Billed L'] = pd.to_numeric(df['Amount Billed L'], errors='coerce').fillna(0)
+        df['Amount Billed'] = df['Amount Billed K'] + df['Amount Billed L']
+        logging.info("Computed Amount Billed field as K + L")
+    else:
+        df['Amount Billed'] = 0
+        logging.warning("Amount Billed columns (K, L) not found, setting Amount Billed to 0")
     
     logging.info("Computed Amount field as Debit + Credit")
     return df
@@ -135,16 +131,16 @@ def determine_account_type(account: str) -> str:
 
 def aggregate_gl_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate GL data by trimmed Job Number and Account Type, summing Amount.
+    Aggregate GL data by trimmed Job Number and Account Type, summing Amount and Amount Billed.
     
     Args:
-        df (pd.DataFrame): GL data with Debit and Credit columns
+        df (pd.DataFrame): GL data with Amount and Amount Billed columns
         
     Returns:
         pd.DataFrame: Aggregated GL data grouped by Job Number and Account Type
     """
     # First, compute amounts if not already done
-    if 'Amount' not in df.columns:
+    if 'Amount' not in df.columns or 'Amount Billed' not in df.columns:
         df = compute_amounts(df)
     
     # Trim whitespace from Job Number
@@ -153,20 +149,29 @@ def aggregate_gl_data(df: pd.DataFrame) -> pd.DataFrame:
     # Determine account type for each record
     df['Account Type'] = df['Account'].apply(determine_account_type)
     
-    # Group by Job Number and Account Type, sum the Amount
-    aggregated_df = df.groupby(['Job Number', 'Account Type'])['Amount'].sum().reset_index()
+    # Group by Job Number and Account Type, sum the Amount and Amount Billed
+    aggregated_df = df.groupby(['Job Number', 'Account Type']).agg({
+        'Amount': 'sum',
+        'Amount Billed': 'sum'
+    }).reset_index()
     
-    # Pivot to have Account Types as columns
+    # Pivot to have Account Types as columns for Amount
     pivot_df = aggregated_df.pivot(index='Job Number', columns='Account Type', values='Amount').fillna(0)
-    
-    # Reset index to make Job Number a regular column
     pivot_df = pivot_df.reset_index()
+    
+    # Pivot for Amount Billed and merge
+    billed_pivot_df = aggregated_df.groupby('Job Number')['Amount Billed'].sum().reset_index()
+    pivot_df = pd.merge(pivot_df, billed_pivot_df, on='Job Number', how='left')
     
     # Ensure we have the expected columns
     expected_columns = ['Material', 'Sub Labor', 'Other']
     for col in expected_columns:
         if col not in pivot_df.columns:
             pivot_df[col] = 0
+    
+    # Ensure Amount Billed column exists
+    if 'Amount Billed' not in pivot_df.columns:
+        pivot_df['Amount Billed'] = 0
     
     logging.info(f"Aggregated GL data to {len(pivot_df)} job records")
     return pivot_df
