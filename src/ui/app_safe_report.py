@@ -128,6 +128,10 @@ def generate_update_reports(merged_df):
     
     labor_df = pd.DataFrame(labor_data)
     
+    # Convert to numeric and filter out rows where Monthly Sub Labor Costs is 0 or blank (include negative values)
+    labor_df['Monthly Sub Labor Costs'] = pd.to_numeric(labor_df['Monthly Sub Labor Costs'], errors='coerce').fillna(0)
+    labor_df = labor_df[labor_df['Monthly Sub Labor Costs'] != 0]
+    
     # 5030 Section - Material Report (4 fields only)
     material_data = []
     for _, job in merged_df.iterrows():
@@ -142,6 +146,10 @@ def generate_update_reports(merged_df):
     
     material_df = pd.DataFrame(material_data)
     
+    # Convert to numeric and filter out rows where Monthly Material Costs is 0 or blank (include negative values)
+    material_df['Monthly Material Costs'] = pd.to_numeric(material_df['Monthly Material Costs'], errors='coerce').fillna(0)
+    material_df = material_df[material_df['Monthly Material Costs'] != 0]
+    
     return labor_df, material_df
 
 def create_excel_update_report(labor_df, material_df):
@@ -155,6 +163,21 @@ def create_excel_update_report(labor_df, material_df):
         
         # Material section updates
         material_df.to_excel(writer, sheet_name='5030_Material_Updates', index=False)
+        
+        # Auto-adjust column widths for better readability
+        for sheet_name in ['5040_Labor_Updates', '5030_Material_Updates']:
+            worksheet = writer.sheets[sheet_name]
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)  # Add padding, max 50 chars
+                worksheet.column_dimensions[column_letter].width = adjusted_width
         
         # Summary sheet
         summary_data = {
@@ -191,6 +214,20 @@ def create_excel_update_report(labor_df, material_df):
         summary_df = pd.DataFrame(summary_data)
         summary_df.to_excel(writer, sheet_name='Summary', index=False)
         
+        # Auto-adjust Summary sheet column widths
+        summary_sheet = writer.sheets['Summary']
+        for column in summary_sheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            summary_sheet.column_dimensions[column_letter].width = adjusted_width
+        
         # Instructions sheet
         instructions = [
             "WIP REPORT UPDATE INSTRUCTIONS",
@@ -226,19 +263,22 @@ def create_excel_update_report(labor_df, material_df):
         
         instructions_df = pd.DataFrame({'Instructions': instructions})
         instructions_df.to_excel(writer, sheet_name='Instructions', index=False)
+        
+        # Auto-adjust Instructions sheet column width
+        instructions_sheet = writer.sheets['Instructions']
+        instructions_sheet.column_dimensions['A'].width = 80  # Wide enough for instructions text
     
     buffer.seek(0)
     return buffer.getvalue()
 
 def display_file_upload_section():
     """Display file upload interface"""
-    st.header("📁 File Upload")
+    st.markdown("#### 📁 File Upload")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("Master WIP Report")
-        st.caption("(Optional - for reference only)")
+        st.markdown("**Master WIP Report**")
         master_file = st.file_uploader(
             "Upload Master WIP Report",
             type=['xlsx', 'xlsm'],
@@ -248,7 +288,7 @@ def display_file_upload_section():
             st.success(f"✅ {master_file.name}")
     
     with col2:
-        st.subheader("WIP Worksheet Export")
+        st.markdown("**WIP Worksheet Export**")
         wip_file = st.file_uploader(
             "Upload WIP Worksheet",
             type=['xlsx'],
@@ -259,7 +299,7 @@ def display_file_upload_section():
             st.success(f"✅ {wip_file.name}")
     
     with col3:
-        st.subheader("GL Inquiry Export")
+        st.markdown("**GL Inquiry Export**")
         gl_file = st.file_uploader(
             "Upload GL Inquiry",
             type=['xlsx'],
@@ -269,106 +309,124 @@ def display_file_upload_section():
             st.session_state.files_uploaded['gl'] = gl_file.getvalue()
             st.success(f"✅ {gl_file.name}")
 
-def display_processing_options():
-    """Display processing options"""
-    st.header("⚙️ Processing Options")
+def display_sidebar_options():
+    """Display processing options in sidebar"""
+    st.sidebar.markdown("### ⚙️ Options")
     
-    col1, col2 = st.columns(2)
+    # Month/Year selector with proper dropdown
+    st.sidebar.markdown("**Report Period**")
     
+    current_year = datetime.now().year
+    years = list(range(current_year - 2, current_year + 2))
+    months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ]
+    
+    col1, col2 = st.sidebar.columns(2)
     with col1:
-        include_closed = st.checkbox("Include Closed Jobs", value=False)
-    
+        selected_month = st.selectbox("Month", months, index=3)  # Default to Apr
     with col2:
-        month_year = st.text_input("Month/Year", value="Apr 25")
+        selected_year = st.selectbox("Year", years, index=len(years)//2)
+    
+    # Format as MMM YY
+    month_year = f"{selected_month} {str(selected_year)[-2:]}"
+    
+    st.sidebar.markdown("**Processing Settings**")
+    include_closed = st.sidebar.checkbox(
+        "Include Closed Jobs", 
+        value=False,
+        help="Check this to include jobs with 'Closed' status in the report. Useful for quarterly reviews."
+    )
     
     return include_closed, month_year
 
 def main():
     st.set_page_config(
-        page_title="WIP Report Automation - Safe Reports",
+        page_title="WIP Report Automation",
         page_icon="📊",
         layout="wide"
     )
     
-    st.title("📊 WIP Report Automation")
-    st.subheader("Safe update reports - NO Excel file corruption risk!")
-    
-    # Important notice
-    st.info("""
-    🔒 **SAFE APPROACH**: This tool generates update reports that you copy/paste into your Excel file manually.
-    This preserves ALL your formulas, formatting, macros, and prevents any corruption issues.
-    """)
+    # Smaller, cleaner title
+    st.markdown("# 📊 WIP Report Automation")
+    st.markdown("*Generate update reports without modifying Excel files*")
+    st.markdown("---")
     
     initialize_session_state()
     
-    # File Upload Section
+    # Sidebar options
+    include_closed, month_year = display_sidebar_options()
+    
+    # File Upload Section (main content)
     display_file_upload_section()
     
-    # Processing Options
-    include_closed, month_year = display_processing_options()
+    st.markdown("---")
     
-    # Process Button
-    if st.button("🚀 Generate Update Reports", type="primary"):
-        if len(st.session_state.files_uploaded) >= 2:  # Only need WIP and GL
-            
-            # Process the data
-            merged_df = process_data(
-                st.session_state.files_uploaded['wip'],
-                st.session_state.files_uploaded['gl'],
-                include_closed
-            )
-            
-            if merged_df is not None:
-                st.session_state.merged_data = merged_df
+    # Process Button - better positioned and styled
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Generate Update Reports", type="primary", use_container_width=True):
+            if len(st.session_state.files_uploaded) >= 2:  # Only need WIP and GL
                 
-                # Generate reports
-                with st.spinner("Generating update reports..."):
-                    labor_df, material_df = generate_update_reports(merged_df)
-                    
-                    # Create Excel report
-                    excel_report = create_excel_update_report(labor_df, material_df)
-                
-                # Display results
-                st.success("✅ Update reports generated successfully!")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("📊 Total Jobs", len(merged_df))
-                    st.metric("💼 Labor Actual", f"${labor_df['Monthly Sub Labor Costs'].sum():,.2f}")
-                    st.metric("📦 Material Actual", f"${material_df['Monthly Material Costs'].sum():,.2f}")
-                
-                with col2:
-                    labor_variance = labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum()
-                    material_variance = material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum()
-                    st.metric("📈 Labor Variance", f"${labor_variance:,.2f}")
-                    st.metric("📈 Material Variance", f"${material_variance:,.2f}")
-                    st.metric("📈 Total Variance", f"${labor_variance + material_variance:,.2f}")
-                
-                # Download button
-                st.download_button(
-                    label="📥 Download Update Reports (Excel)",
-                    data=excel_report,
-                    file_name=f"WIP_Update_Reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Download comprehensive update reports that you can use to manually update your WIP Excel file"
+                # Process the data
+                merged_df = process_data(
+                    st.session_state.files_uploaded['wip'],
+                    st.session_state.files_uploaded['gl'],
+                    include_closed
                 )
                 
-                # Preview data
-                st.header("📋 Preview of Updates")
-                
-                tab1, tab2 = st.tabs(["5040 - Labor Updates", "5030 - Material Updates"])
-                
-                with tab1:
-                    st.subheader("Labor Section Updates")
-                    st.dataframe(labor_df, use_container_width=True)
-                
-                with tab2:
-                    st.subheader("Material Section Updates") 
-                    st.dataframe(material_df, use_container_width=True)
-                
-        else:
-            st.error("❌ Please upload at least the WIP Worksheet and GL Inquiry files")
+                if merged_df is not None:
+                    st.session_state.merged_data = merged_df
+                    
+                    # Generate reports
+                    with st.spinner("Generating update reports..."):
+                        labor_df, material_df = generate_update_reports(merged_df)
+                        
+                        # Create Excel report
+                        excel_report = create_excel_update_report(labor_df, material_df)
+                    
+                    # Display results
+                    st.success("✅ Update reports generated successfully!")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric("📊 Total Jobs", len(merged_df))
+                        st.metric("💼 Labor Actual", f"${labor_df['Monthly Sub Labor Costs'].sum():,.2f}")
+                        st.metric("📦 Material Actual", f"${material_df['Monthly Material Costs'].sum():,.2f}")
+                    
+                    with col2:
+                        labor_variance = labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum()
+                        material_variance = material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum()
+                        st.metric("📈 Labor Variance", f"${labor_variance:,.2f}")
+                        st.metric("📈 Material Variance", f"${material_variance:,.2f}")
+                        st.metric("📈 Total Variance", f"${labor_variance + material_variance:,.2f}")
+                    
+                    # Download button
+                    st.download_button(
+                        label="📥 Download Update Reports (Excel)",
+                        data=excel_report,
+                        file_name=f"WIP_Update_Reports_{month_year.replace(' ', '')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        help="Download comprehensive update reports that you can use to manually update your WIP Excel file"
+                    )
+                    
+                    # Preview data
+                    st.markdown("#### 📋 Preview of Updates")
+                    
+                    tab1, tab2 = st.tabs(["5040 - Labor Updates", "5030 - Material Updates"])
+                    
+                    with tab1:
+                        st.markdown("**Labor Section Updates**")
+                        st.dataframe(labor_df, use_container_width=True)
+                    
+                    with tab2:
+                        st.markdown("**Material Section Updates**") 
+                        st.dataframe(material_df, use_container_width=True)
+                    
+            else:
+                st.error("❌ Please upload at least the WIP Worksheet and GL Inquiry files")
 
 if __name__ == "__main__":
     main() 
