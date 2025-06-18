@@ -143,7 +143,7 @@ def generate_update_reports(merged_df):
             'Estimated Sub Labor Costs': estimated_labor,  # Using actual column name
             'Monthly Sub Labor Costs': labor_actual,
             'Percent Complete': percent_complete,  # New column
-            'Amount Billed': job.get('4020', 0)  # Using 4020 account data for billing
+            'Amount Billed': job.get('Amount Billed', 0)  # Using properly calculated Amount Billed from GL aggregation
         })
     
     labor_df = pd.DataFrame(labor_data)
@@ -362,19 +362,9 @@ def display_file_upload_section():
     """Display file upload interface"""
     st.markdown("#### 📁 File Upload")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Master WIP Report**")
-        master_file = st.file_uploader(
-            "Upload Master WIP Report",
-            type=['xlsx', 'xlsm'],
-            key='master_wip'
-        )
-        if master_file:
-            st.success(f"✅ {master_file.name}")
-    
-    with col2:
         st.markdown("**WIP Worksheet Export**")
         wip_file = st.file_uploader(
             "Upload WIP Worksheet",
@@ -385,7 +375,7 @@ def display_file_upload_section():
             st.session_state.files_uploaded['wip'] = wip_file.getvalue()
             st.success(f"✅ {wip_file.name}")
     
-    with col3:
+    with col2:
         st.markdown("**GL Inquiry Export**")
         gl_file = st.file_uploader(
             "Upload GL Inquiry",

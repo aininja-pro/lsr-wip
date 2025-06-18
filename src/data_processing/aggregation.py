@@ -78,10 +78,10 @@ def filter_gl_accounts(df: pd.DataFrame, account_filters: List[str] = None) -> p
 
 def compute_amounts(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute the Amount field as Debit + Credit and Amount Billed as K + L for each record.
+    Compute the Amount field as Debit + Credit and Amount Billed as positive sum of K + L for each record.
     
     Args:
-        df (pd.DataFrame): GL data with Debit, Credit, and billing columns
+        df (pd.DataFrame): GL data with Debit, Credit columns
         
     Returns:
         pd.DataFrame: GL data with computed Amount and Amount Billed columns
@@ -93,17 +93,14 @@ def compute_amounts(df: pd.DataFrame) -> pd.DataFrame:
     # Compute Amount = Debit + Credit
     df['Amount'] = df['Debit'] + df['Credit']
     
-    # Compute Amount Billed = K + L (if these columns exist)
-    if 'Amount Billed K' in df.columns and 'Amount Billed L' in df.columns:
-        df['Amount Billed K'] = pd.to_numeric(df['Amount Billed K'], errors='coerce').fillna(0)
-        df['Amount Billed L'] = pd.to_numeric(df['Amount Billed L'], errors='coerce').fillna(0)
-        df['Amount Billed'] = df['Amount Billed K'] + df['Amount Billed L']
-        logging.info("Computed Amount Billed field as K + L")
-    else:
-        df['Amount Billed'] = 0
-        logging.warning("Amount Billed columns (K, L) not found, setting Amount Billed to 0")
+    # Compute Amount Billed = positive sum of columns K & L (which are Debit & Credit)
+    # The user explained that K & L in Excel terms are the Debit and Credit columns
+    # and we need to make the result positive since GL shows negative values
+    billing_amount = df['Debit'] + df['Credit']
+    df['Amount Billed'] = -billing_amount  # Flip the sign to make negative values positive
     
     logging.info("Computed Amount field as Debit + Credit")
+    logging.info("Computed Amount Billed field as positive sum of K + L (Debit + Credit)")
     return df
 
 
