@@ -148,9 +148,12 @@ def generate_update_reports(merged_df):
     
     labor_df = pd.DataFrame(labor_data)
     
-    # Convert to numeric and filter out rows where Monthly Sub Labor Costs is 0 or blank (include negative values)
+    # Convert to numeric and filter to include jobs with labor costs OR billing
     labor_df['Monthly Sub Labor Costs'] = pd.to_numeric(labor_df['Monthly Sub Labor Costs'], errors='coerce').fillna(0)
-    labor_df = labor_df[labor_df['Monthly Sub Labor Costs'] != 0]
+    labor_df['Amount Billed'] = pd.to_numeric(labor_df['Amount Billed'], errors='coerce').fillna(0)
+    
+    # Include jobs that have either labor costs (!=0) OR have been billed
+    labor_df = labor_df[(labor_df['Monthly Sub Labor Costs'] != 0) | (labor_df['Amount Billed'] > 0)]
     
     # 5030 Section - Material Report (4 fields only)
     material_data = []
