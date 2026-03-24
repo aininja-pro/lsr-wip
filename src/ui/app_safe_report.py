@@ -304,100 +304,78 @@ def display_sidebar_options():
     
     return include_closed, month_year
 
-def main():
-    st.set_page_config(
-        page_title="WIP Report Automation",
-        page_icon="📊",
-        layout="wide"
-    )
-    
-    # Smaller, cleaner title
-    st.markdown("# 📊 WIP Report Automation")
-    st.markdown("*Generate update reports without modifying Excel files*")
-    st.markdown("---")
-    
-    initialize_session_state()
-    
+def render_wip_reports():
+    """Render the WIP Reports tool — pure extraction of existing logic."""
+    st.markdown("### WIP Report Generator")
+    st.caption("Generate update reports without modifying Excel files")
+
     # Sidebar options
     include_closed, month_year = display_sidebar_options()
-    
-    # File Upload Section (main content)
+
+    # File Upload Section
     display_file_upload_section()
-    
+
     st.markdown("---")
-    
-    # Process Button - better positioned and styled
+
+    # Process Button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🚀 Generate Update Reports", type="primary", use_container_width=True):
-            if len(st.session_state.files_uploaded) >= 2:  # Only need WIP and GL
-                
-                # Process the data
+        if st.button("Generate Update Reports", type="primary", use_container_width=True):
+            if len(st.session_state.files_uploaded) >= 2:
                 merged_df = process_data(
                     st.session_state.files_uploaded['wip'],
                     st.session_state.files_uploaded['gl'],
                     include_closed
                 )
-                
+
                 if merged_df is not None:
                     st.session_state.merged_data = merged_df
-                    
-                    # Generate reports
+
                     with st.spinner("Generating update reports..."):
                         labor_df, material_df = generate_update_reports(merged_df)
-                        
-                        # Create Excel report
                         excel_report = create_excel_update_report(labor_df, material_df)
-                    
-                    # Store results in session state for display
+
                     st.session_state.results_ready = True
                     st.session_state.labor_df = labor_df
                     st.session_state.material_df = material_df
                     st.session_state.excel_report = excel_report
                     st.session_state.month_year = month_year
-                    
+
             else:
-                st.error("❌ Please upload at least the WIP Worksheet and GL Inquiry files")
-    
-    # Download button - appears right after processing
+                st.error("Please upload both the WIP Worksheet and GL Inquiry files")
+
+    # Download button
     if st.session_state.get('results_ready', False):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.download_button(
-                label="📥 Download Update Reports (Excel)",
+                label="Download Update Reports (Excel)",
                 data=st.session_state.excel_report,
                 file_name=f"WIP_Update_Reports_{st.session_state.month_year.replace(' ', '')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Download comprehensive update reports that you can use to manually update your WIP Excel file",
+                help="Download comprehensive update reports for your WIP Excel file",
                 use_container_width=True
             )
-    
-    # Results Section - Same width as file upload section above
+
+    # Results Section
     if st.session_state.get('results_ready', False):
         st.markdown("---")
-        
-        # Create balanced full-width layout (same as file upload section)
+
         col1, col2 = st.columns([1, 1])
-        
+
         with col1:
-            # Processing Status Section
-            st.markdown("### 🚀 Generate Update Reports")
-            
-            # Show processing status
-            st.success(f"✅ Processed {st.session_state.gl_entries} GL entries")
-            st.success(f"✅ Merged data for {len(st.session_state.merged_data)} jobs")
-            st.success("✅ Update reports generated successfully!")
-        
+            st.markdown("#### Processing Status")
+            st.success(f"Processed {st.session_state.gl_entries} GL entries")
+            st.success(f"Merged data for {len(st.session_state.merged_data)} jobs")
+            st.success("Update reports generated successfully!")
+
         with col2:
-            # Combined Report Summary and Data Preview
-            st.markdown("### 📊 Report Summary")
-            
-            # Calculate variances
+            st.markdown("#### Report Summary")
+
             labor_variance = st.session_state.labor_df['Monthly Sub Labor Costs'].sum() - st.session_state.labor_df['Estimated Sub Labor Costs'].sum()
             material_variance = st.session_state.material_df['Monthly Material Costs'].sum() - st.session_state.material_df['Estimated Material Costs'].sum()
             total_variance = labor_variance + material_variance
-            
-            # Create a clean summary table
+
             summary_data = {
                 'Category': ['Jobs Processed', 'Labor Actual', 'Material Actual', 'Labor Variance', 'Material Variance', 'Total Variance'],
                 'Value': [
@@ -409,37 +387,62 @@ def main():
                     f"${total_variance:,.2f}"
                 ]
             }
-            
+
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, use_container_width=True, hide_index=True)
-        
-        # Data Preview Section - Full width underneath
+
         st.markdown("---")
-        st.markdown("### 📋 Data Preview")
-        
-        tab1, tab2 = st.tabs(["🔧 5040 - Labor Updates", "📦 5030 - Material Updates"])
-        
+        st.markdown("#### Data Preview")
+
+        tab1, tab2 = st.tabs(["5040 - Labor Updates", "5030 - Material Updates"])
+
         with tab1:
             st.markdown("**Labor Section Data (Non-Zero Values Only)**")
             if len(st.session_state.labor_df) > 0:
-                st.dataframe(
-                    st.session_state.labor_df, 
-                    use_container_width=True,
-                    height=450
-                )
+                st.dataframe(st.session_state.labor_df, use_container_width=True, height=450)
             else:
                 st.info("No labor entries with non-zero values found.")
-        
+
         with tab2:
-            st.markdown("**Material Section Data (Non-Zero Values Only)**") 
+            st.markdown("**Material Section Data (Non-Zero Values Only)**")
             if len(st.session_state.material_df) > 0:
-                st.dataframe(
-                    st.session_state.material_df, 
-                    use_container_width=True,
-                    height=450
-                )
+                st.dataframe(st.session_state.material_df, use_container_width=True, height=450)
             else:
                 st.info("No material entries with non-zero values found.")
+
+
+def render_lien_letters():
+    """Render the Lien Letter Generator tool. (Step 6 will fill this in.)"""
+    st.markdown("### Lien Letter Generator")
+    st.caption("Generate pre-lien notice letters from an invoice spreadsheet")
+    st.info("Coming soon — this tool will be built in the next step.")
+
+
+def main():
+    st.set_page_config(
+        page_title="LSR_Pay Tools",
+        page_icon="📊",
+        layout="wide"
+    )
+
+    # Apply custom theme
+    from ui.styles import inject_custom_css
+    inject_custom_css()
+
+    initialize_session_state()
+
+    # App header
+    st.markdown("# LSR_Pay Tools")
+
+    # Top-level navigation
+    selected_tab = st.tabs(["WIP Reports", "Lien Letters"])
+
+    with selected_tab[0]:
+        render_wip_reports()
+
+    with selected_tab[1]:
+        render_lien_letters()
+
 
 if __name__ == "__main__":
     main() 
