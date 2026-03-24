@@ -26,7 +26,6 @@ from data_processing.merge_data import merge_wip_with_gl
 from data_processing.column_mapping import map_dataframe_columns
 from data_processing.letter_processing import parse_invoice_spreadsheet
 from letter_generation.letter_template import generate_letter, make_letter_filename
-from letter_generation.pdf_converter import is_libreoffice_available, convert_docx_to_pdf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -436,10 +435,6 @@ def render_lien_letters():
     st.markdown("### Lien Letter Generator")
     st.caption("Generate pre-lien notice letters from an invoice spreadsheet")
 
-    # Check PDF capability once
-    pdf_available = is_libreoffice_available()
-    if not pdf_available:
-        st.warning("PDF conversion requires LibreOffice (not installed). DOCX files will still be generated.")
 
     # Upload section
     st.markdown("**Upload Invoice Spreadsheet**")
@@ -527,11 +522,6 @@ def render_lien_letters():
                         zf.writestr(f"docx/{docx_filename}", docx_bytes.getvalue())
 
                         # Try PDF conversion
-                        if pdf_available:
-                            pdf_result = convert_docx_to_pdf(docx_bytes, docx_filename.replace('.docx', '.pdf'))
-                            if pdf_result:
-                                pdf_filename = docx_filename.replace('.docx', '.pdf')
-                                zf.writestr(f"pdf/{pdf_filename}", pdf_result.getvalue())
                     except Exception as e:
                         status = f"Error: {e}"
                         logger.error(f"Letter generation failed for row {idx+1}: {e}")
@@ -548,9 +538,12 @@ def render_lien_letters():
                     progress.progress((idx + 1) / total)
 
             zip_buffer.seek(0)
-            st.session_state.lien_generated_zip = zip_buffer.getvalue()
+            zip_bytes = zip_buffer.getvalue()
+            st.session_state.lien_generated_zip = zip_bytes
+            st.session_state.lien_zip_filename = f"Lien_Letters_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
             st.session_state.lien_generation_complete = True
             st.session_state.lien_summary_df = pd.DataFrame(summary_rows)
+            logger.info(f"ZIP generated: {len(zip_bytes)} bytes")
 
     # Results
     if st.session_state.get('lien_generation_complete', False):
@@ -567,21 +560,24 @@ def render_lien_letters():
         if n_errors > 0:
             st.warning(f"{n_errors} letters had issues — see Status column below")
 
+        # Download button — placed before table so it's immediately visible
+        zip_data = st.session_state.get('lien_generated_zip')
+        if zip_data:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.download_button(
+                    label="Download All Letters (ZIP)",
+                    data=zip_data,
+                    file_name=st.session_state.get('lien_zip_filename', 'Lien_Letters.zip'),
+                    mime="application/zip",
+                    use_container_width=True,
+                    key="lien_download_zip"
+                )
+
         # Summary table
         st.markdown("#### Letter Summary")
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
         st.caption(f"Total: {len(summary_df)} letters, ${total_amount:,.2f}")
-
-        # Download button
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="Download All Letters (ZIP)",
-                data=st.session_state.lien_generated_zip,
-                file_name=f"Lien_Letters_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                mime="application/zip",
-                use_container_width=True
-            )
 
 
 def main():
