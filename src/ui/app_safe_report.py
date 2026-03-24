@@ -14,14 +14,15 @@ import logging
 
 # Import our data processing functions
 import sys
-sys.path.append('/app/src')
+sys.path.append(str(Path(__file__).parent.parent))
 
 from data_processing.aggregation import (
-    filter_gl_accounts, 
-    compute_amounts, 
+    filter_gl_accounts,
+    compute_amounts,
     aggregate_gl_data
 )
 from data_processing.merge_data import merge_wip_with_gl
+from data_processing.column_mapping import map_dataframe_columns
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,93 +30,43 @@ logger = logging.getLogger(__name__)
 
 def initialize_session_state():
     """Initialize session state variables"""
-    if 'files_uploaded' not in st.session_state:
-        st.session_state.files_uploaded = {}
-    if 'processing_complete' not in st.session_state:
-        st.session_state.processing_complete = False
-    if 'merged_data' not in st.session_state:
-        st.session_state.merged_data = None
-    if 'results_ready' not in st.session_state:
-        st.session_state.results_ready = False
-    if 'labor_df' not in st.session_state:
-        st.session_state.labor_df = None
-    if 'material_df' not in st.session_state:
-        st.session_state.material_df = None
-    if 'excel_report' not in st.session_state:
-        st.session_state.excel_report = None
-    if 'month_year' not in st.session_state:
-        st.session_state.month_year = None
-    if 'gl_entries' not in st.session_state:
-        st.session_state.gl_entries = 0
-
-def map_columns_flexible(df, column_mapping):
-    """Map column names flexibly using variations"""
-    mapped_df = df.copy()
-    
-    for standard_name, variations in column_mapping.items():
-        for variation in variations:
-            if variation in df.columns:
-                if variation != standard_name:
-                    mapped_df = mapped_df.rename(columns={variation: standard_name})
-                break
-    
-    return mapped_df
+    defaults = {
+        'files_uploaded': {},
+        'merged_data': None,
+        'results_ready': False,
+        'labor_df': None,
+        'material_df': None,
+        'excel_report': None,
+        'month_year': None,
+        'gl_entries': 0,
+    }
+    for key, default in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
 
 def process_data(wip_bytes, gl_bytes, include_closed):
     """Process the data using our existing functions"""
     try:
         with st.spinner("Processing GL data..."):
-            # Load GL inquiry from bytes
             gl_df = pd.read_excel(io.BytesIO(gl_bytes))
-            
-            # Log available GL columns to help debug
             logger.info(f"Available GL Inquiry columns: {list(gl_df.columns)}")
-            
-            # Apply column mapping for GL data
-            gl_column_variations = {
-                'Account': ['Account', 'Account Number', 'Acct', 'GL Account'],
-                'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No'],
-                'Debit': ['Debit', 'Dr', 'Debit Amount'],
-                'Credit': ['Credit', 'Cr', 'Credit Amount'],
-                'Account Type': ['Account Type', 'Type', 'Category']
-            }
-            gl_df = map_columns_flexible(gl_df, gl_column_variations)
-            
-            # Process GL data step by step
+            gl_df = map_dataframe_columns(gl_df, 'gl_inquiry')
+
             filtered_gl = filter_gl_accounts(gl_df)
             amounts_gl = compute_amounts(filtered_gl)
             gl_summary = aggregate_gl_data(amounts_gl)
-            
-            # Store GL entries count for results display
             st.session_state.gl_entries = len(gl_summary)
-            
+
         with st.spinner("Merging data..."):
-            # Load WIP worksheet from bytes
             wip_df = pd.read_excel(io.BytesIO(wip_bytes))
-            
-            # Log available columns to help debug
             logger.info(f"Available WIP Worksheet columns: {list(wip_df.columns)}")
-            
-            # Apply column mapping for WIP worksheet
-            wip_column_variations = {
-                'Job Number': ['Job Number', 'Job No', 'Job #', 'Job', 'Project Number', 'Project No'],
-                'Status': ['Status', 'Job Status', 'Project Status', 'State'],
-                'Job Name': ['Job Name', 'Project Name', 'Description', 'Job Description'],
-                'Budget Material': ['Budget Material', 'Material Budget', 'Mat Budget', 'Budget Mat'],
-                'Budget Labor': ['Budget Labor', 'Labor Budget', 'Lab Budget', 'Budget Lab'],
-                'Contract Amount': ['Contract Amount', 'Contract Value', 'Total Contract', 'Contract'],
-                'Estimated Sub Labor': ['Estimated Sub Labor', 'Est Sub Labor', 'Sub Labor Budget', 'Sub Labor Est'],
-                'Estimated Material': ['Estimated Material', 'Est Material', 'Material Budget', 'Material Est']
-            }
-            wip_df = map_columns_flexible(wip_df, wip_column_variations)
-            
-            # Log mapped columns
+            wip_df = map_dataframe_columns(wip_df, 'wip_worksheet')
             logger.info(f"WIP Worksheet columns after mapping: {list(wip_df.columns)}")
-            
+
             merged_df = merge_wip_with_gl(wip_df, gl_summary, include_closed)
-            
+
         return merged_df
-        
+
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
         logger.error(f"Processing error: {e}")
@@ -175,149 +126,91 @@ def generate_update_reports(merged_df):
     
     return labor_df, material_df
 
+def _auto_adjust_column_widths(worksheet):
+    """Auto-adjust column widths based on cell content."""
+    for column in worksheet.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except (TypeError, AttributeError):
+                pass
+        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+
+def _apply_number_format(worksheet, col_names, fmt):
+    """Apply a number format to named columns in a worksheet."""
+    headers = [cell.value for cell in worksheet[1]]
+    for col_name in col_names:
+        if col_name in headers:
+            col_index = headers.index(col_name) + 1
+            for row in range(2, worksheet.max_row + 1):
+                cell = worksheet.cell(row=row, column=col_index)
+                if cell.value is not None and isinstance(cell.value, (int, float)):
+                    cell.number_format = fmt
+
+
 def create_excel_update_report(labor_df, material_df):
     """Create a comprehensive Excel report with all updates"""
-    
+
     buffer = io.BytesIO()
-    
+
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Labor section updates
         labor_df.to_excel(writer, sheet_name='5040_Labor_Updates', index=False)
-        
-        # Material section updates
         material_df.to_excel(writer, sheet_name='5030_Material_Updates', index=False)
-        
-        # Auto-adjust column widths and apply formatting
-        from openpyxl.styles import NamedStyle
-        
-        # Create currency style
-        currency_style = NamedStyle(name="currency")
-        currency_style.number_format = '$#,##0.00'
-        
-        # Create percentage style
-        percentage_style = NamedStyle(name="percentage")
-        percentage_style.number_format = '0.00%'
-        
-        # Currency columns for each sheet
+
+        # Format data sheets
         currency_columns = {
             '5040_Labor_Updates': ['Contract Amount', 'Monthly Sub Labor Costs', 'Estimated Sub Labor Costs', 'Amount Billed'],
             '5030_Material_Updates': ['Monthly Material Costs', 'Estimated Material Costs']
         }
-        
-        # Percentage columns for each sheet
-        percentage_columns = {
-            '5040_Labor_Updates': ['Percent Complete'],
-            '5030_Material_Updates': []
-        }
-        
+
         for sheet_name in ['5040_Labor_Updates', '5030_Material_Updates']:
             worksheet = writer.sheets[sheet_name]
-            
-            # Get header row to find column positions
-            headers = [cell.value for cell in worksheet[1]]
-            
-            # Apply currency formatting to appropriate columns
-            for col_name in currency_columns[sheet_name]:
-                if col_name in headers:
-                    col_index = headers.index(col_name) + 1  # Excel is 1-indexed
-                    col_letter = worksheet.cell(row=1, column=col_index).column_letter
-                    
-                    # Apply currency formatting to the entire column (skip header)
+            _apply_number_format(worksheet, currency_columns[sheet_name], '$#,##0.00')
+
+            # Percent Complete needs value conversion (already *100) before formatting
+            if sheet_name == '5040_Labor_Updates':
+                headers = [cell.value for cell in worksheet[1]]
+                if 'Percent Complete' in headers:
+                    col_index = headers.index('Percent Complete') + 1
                     for row in range(2, worksheet.max_row + 1):
                         cell = worksheet.cell(row=row, column=col_index)
                         if cell.value is not None and isinstance(cell.value, (int, float)):
-                            cell.number_format = '$#,##0.00'
-            
-            # Apply percentage formatting to appropriate columns
-            for col_name in percentage_columns[sheet_name]:
-                if col_name in headers:
-                    col_index = headers.index(col_name) + 1  # Excel is 1-indexed
-                    col_letter = worksheet.cell(row=1, column=col_index).column_letter
-                    
-                    # Apply percentage formatting to the entire column (skip header)
-                    for row in range(2, worksheet.max_row + 1):
-                        cell = worksheet.cell(row=row, column=col_index)
-                        if cell.value is not None and isinstance(cell.value, (int, float)):
-                            # Convert decimal to percentage (divide by 100 since we already multiplied by 100)
                             cell.value = cell.value / 100
                             cell.number_format = '0.00%'
-            
-            # Auto-adjust column widths
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)  # Add padding, max 50 chars
-                worksheet.column_dimensions[column_letter].width = adjusted_width
-        
+
+            _auto_adjust_column_widths(worksheet)
+
         # Summary sheet
+        labor_actual_total = labor_df['Monthly Sub Labor Costs'].sum()
+        material_actual_total = material_df['Monthly Material Costs'].sum()
+        labor_budget_total = labor_df['Estimated Sub Labor Costs'].sum()
+        material_budget_total = material_df['Estimated Material Costs'].sum()
+        labor_variance = labor_actual_total - labor_budget_total
+        material_variance = material_actual_total - material_budget_total
+        contract_total = labor_df['Contract Amount'].sum()
+        billed_total = labor_df['Amount Billed'].sum()
+
         summary_data = {
             'Section': ['5040 - Labor', '5030 - Material', 'Total'],
             'Jobs Count': [len(labor_df), len(material_df), len(labor_df)],
-            'Total Contract Amount': [
-                labor_df['Contract Amount'].sum(),
-                0,  # Materials don't have contract amount
-                labor_df['Contract Amount'].sum()
-            ],
-            'Total Actual': [
-                labor_df['Monthly Sub Labor Costs'].sum(), 
-                material_df['Monthly Material Costs'].sum(),
-                labor_df['Monthly Sub Labor Costs'].sum() + material_df['Monthly Material Costs'].sum()
-            ],
-            'Total Budget': [
-                labor_df['Estimated Sub Labor Costs'].sum(),
-                material_df['Estimated Material Costs'].sum(), 
-                labor_df['Estimated Sub Labor Costs'].sum() + material_df['Estimated Material Costs'].sum()
-            ],
-            'Total Variance': [
-                labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum(),
-                material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum(),
-                (labor_df['Monthly Sub Labor Costs'].sum() - labor_df['Estimated Sub Labor Costs'].sum()) +
-                (material_df['Monthly Material Costs'].sum() - material_df['Estimated Material Costs'].sum())
-            ],
-            'Total Amount Billed': [
-                labor_df['Amount Billed'].sum(),
-                0,  # Only labor section has amount billed
-                labor_df['Amount Billed'].sum()
-            ]
+            'Total Contract Amount': [contract_total, 0, contract_total],
+            'Total Actual': [labor_actual_total, material_actual_total, labor_actual_total + material_actual_total],
+            'Total Budget': [labor_budget_total, material_budget_total, labor_budget_total + material_budget_total],
+            'Total Variance': [labor_variance, material_variance, labor_variance + material_variance],
+            'Total Amount Billed': [billed_total, 0, billed_total]
         }
-        
+
         summary_df = pd.DataFrame(summary_data)
         summary_df.to_excel(writer, sheet_name='Summary', index=False)
-        
-        # Apply currency formatting to Summary sheet
+
         summary_sheet = writer.sheets['Summary']
-        summary_headers = [cell.value for cell in summary_sheet[1]]
-        
-        # Currency columns in summary (all except 'Section' and 'Jobs Count')
-        summary_currency_cols = ['Total Contract Amount', 'Total Actual', 'Total Budget', 'Total Variance', 'Total Amount Billed']
-        
-        for col_name in summary_currency_cols:
-            if col_name in summary_headers:
-                col_index = summary_headers.index(col_name) + 1
-                for row in range(2, summary_sheet.max_row + 1):
-                    cell = summary_sheet.cell(row=row, column=col_index)
-                    if cell.value is not None and isinstance(cell.value, (int, float)):
-                        cell.number_format = '$#,##0.00'
-        
-        # Auto-adjust Summary sheet column widths
-        for column in summary_sheet.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 50)
-            summary_sheet.column_dimensions[column_letter].width = adjusted_width
-        
+        _apply_number_format(summary_sheet, ['Total Contract Amount', 'Total Actual', 'Total Budget', 'Total Variance', 'Total Amount Billed'], '$#,##0.00')
+        _auto_adjust_column_widths(summary_sheet)
+
         # Instructions sheet
         instructions = [
             "WIP REPORT UPDATE INSTRUCTIONS",
@@ -329,35 +222,25 @@ def create_excel_update_report(labor_df, material_df):
             "",
             "1. LABOR SECTION (5040):",
             "   - Open the '5040_Labor_Updates' tab in this report",
-            "   - Copy the 'Monthly Sub Labor Costs' column values", 
+            "   - Copy the 'Monthly Sub Labor Costs' column values",
             "   - Paste them into the appropriate column in your WIP Report's 5040 section",
             "",
             "2. MATERIAL SECTION (5030):",
             "   - Open the '5030_Material_Updates' tab in this report",
             "   - Copy the 'Monthly Material Costs' column values",
-            "   - Paste them into the appropriate column in your WIP Report's 5030 section", 
+            "   - Paste them into the appropriate column in your WIP Report's 5030 section",
             "",
             "3. VERIFICATION:",
             "   - Check the 'Summary' tab for totals and variance analysis",
             "   - Variances > $1,000 should be reviewed",
             "",
-            "ADVANTAGES OF THIS APPROACH:",
-            "✅ NO risk of corrupting your Excel file",
-            "✅ ALL formulas and formatting preserved", 
-            "✅ All macros and VBA code remain intact",
-            "✅ You maintain full control over what gets updated",
-            "✅ Easy to verify changes before applying them",
-            "",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         ]
-        
+
         instructions_df = pd.DataFrame({'Instructions': instructions})
         instructions_df.to_excel(writer, sheet_name='Instructions', index=False)
-        
-        # Auto-adjust Instructions sheet column width
-        instructions_sheet = writer.sheets['Instructions']
-        instructions_sheet.column_dimensions['A'].width = 80  # Wide enough for instructions text
-    
+        writer.sheets['Instructions'].column_dimensions['A'].width = 80
+
     buffer.seek(0)
     return buffer.getvalue()
 

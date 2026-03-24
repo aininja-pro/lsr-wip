@@ -43,6 +43,22 @@ COLUMN_MAPPINGS = {
         'Labor': ['Labor', 'Labour', 'Lab', 'Labor Cost'],
         'Other': ['Other', 'Other Costs', 'Misc', 'Miscellaneous'],
         'Total': ['Total', 'Total Cost', 'Grand Total', 'Sum']
+    },
+    'lien_invoice': {
+        'account_number': ['Account Number', 'Acct Number', 'Account #', 'Acct #'],
+        'parent_account_name': ['Parent Account Name', 'Parent Account', 'Management Company'],
+        'bill_to_address': ['Bill To Location Address 1', 'Bill To Address', 'Billing Address'],
+        'bill_to_state': ['Bill To State/Province', 'Bill To State', 'Billing State'],
+        'bill_to_zip': ['Bill To Zip/Post Code', 'Bill To Zip', 'Billing Zip'],
+        'customer_name': ['Customer Name', 'Property Name', 'Property'],
+        'service_address': ['Service Location Address 1', 'Service Address', 'Service Location Address'],
+        'service_city': ['Service Location City', 'Service City'],
+        'service_state': ['Service Location State/Province', 'Service State'],
+        'service_zip': ['Service Location Zip/Post Code', 'Service Zip'],
+        'invoice_date': ['Invoice Date', 'Inv Date'],
+        'invoice_total': ['Invoice Total', 'Invoice Amount', 'Amount', 'Total'],
+        'invoice_number': ['Invoice #', 'Invoice Number', 'Inv #', 'Inv Number'],
+        'owner': ['Owner', 'Property Owner']
     }
 }
 
@@ -146,7 +162,8 @@ def validate_required_columns(file_type: str, column_mapping: Dict[str, str],
     default_required = {
         'gl_inquiry': ['Account', 'Job Number', 'Debit', 'Credit'],
         'wip_worksheet': ['Job Number', 'Status'],
-        'wip_report': ['Job Number']
+        'wip_report': ['Job Number'],
+        'lien_invoice': ['customer_name', 'service_address', 'service_city', 'service_state', 'service_zip', 'invoice_total', 'invoice_number']
     }
     
     if required_columns is None:
