@@ -1,4 +1,6 @@
 pandas
 openpyxl
 streamlit
-xlsxwriter 
+xlsxwriter
+streamlit-shadcn-ui
+python-docx
