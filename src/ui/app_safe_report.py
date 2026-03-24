@@ -8,7 +8,8 @@ This avoids ALL Excel corruption issues
 import streamlit as st
 import pandas as pd
 import io
-from datetime import datetime
+import zipfile
+from datetime import datetime, date, timedelta
 from pathlib import Path
 import logging
 
@@ -23,6 +24,9 @@ from data_processing.aggregation import (
 )
 from data_processing.merge_data import merge_wip_with_gl
 from data_processing.column_mapping import map_dataframe_columns
+from data_processing.letter_processing import parse_invoice_spreadsheet
+from letter_generation.letter_template import generate_letter, make_letter_filename
+from letter_generation.pdf_converter import is_libreoffice_available, convert_docx_to_pdf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +35,7 @@ logger = logging.getLogger(__name__)
 def initialize_session_state():
     """Initialize session state variables"""
     defaults = {
+        # WIP Reports state
         'files_uploaded': {},
         'merged_data': None,
         'results_ready': False,
@@ -39,6 +44,12 @@ def initialize_session_state():
         'excel_report': None,
         'month_year': None,
         'gl_entries': 0,
+        # Lien Letters state
+        'lien_parsed_df': None,
+        'lien_parse_warnings': [],
+        'lien_generated_zip': None,
+        'lien_generation_complete': False,
+        'lien_summary_df': None,
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -411,11 +422,166 @@ def render_wip_reports():
                 st.info("No material entries with non-zero values found.")
 
 
+def _clear_lien_state():
+    """Clear lien letter session state for a fresh upload."""
+    st.session_state.lien_parsed_df = None
+    st.session_state.lien_parse_warnings = []
+    st.session_state.lien_generated_zip = None
+    st.session_state.lien_generation_complete = False
+    st.session_state.lien_summary_df = None
+
+
 def render_lien_letters():
-    """Render the Lien Letter Generator tool. (Step 6 will fill this in.)"""
+    """Render the Lien Letter Generator tool."""
     st.markdown("### Lien Letter Generator")
     st.caption("Generate pre-lien notice letters from an invoice spreadsheet")
-    st.info("Coming soon — this tool will be built in the next step.")
+
+    # Check PDF capability once
+    pdf_available = is_libreoffice_available()
+    if not pdf_available:
+        st.warning("PDF conversion requires LibreOffice (not installed). DOCX files will still be generated.")
+
+    # Upload section
+    st.markdown("**Upload Invoice Spreadsheet**")
+    invoice_file = st.file_uploader(
+        "Upload overdue invoice export (.xlsx)",
+        type=['xlsx'],
+        key='lien_invoice_upload'
+    )
+
+    # Parse on upload
+    if invoice_file:
+        file_bytes = invoice_file.getvalue()
+        # Re-parse if it's a new file
+        file_id = f"{invoice_file.name}_{len(file_bytes)}"
+        if st.session_state.get('_lien_file_id') != file_id:
+            _clear_lien_state()
+            st.session_state._lien_file_id = file_id
+            try:
+                parsed_df, warnings = parse_invoice_spreadsheet(io.BytesIO(file_bytes))
+                st.session_state.lien_parsed_df = parsed_df
+                st.session_state.lien_parse_warnings = warnings
+                st.success(f"{len(parsed_df)} invoices found")
+            except ValueError as e:
+                st.error(str(e))
+                return
+
+    parsed_df = st.session_state.get('lien_parsed_df')
+    if parsed_df is None:
+        return
+
+    # Show warnings
+    warnings = st.session_state.get('lien_parse_warnings', [])
+    if warnings:
+        with st.expander(f"Warnings ({len(warnings)})", expanded=False):
+            for w in warnings:
+                st.warning(w)
+
+    # Settings
+    st.markdown("---")
+    st.markdown("**Settings**")
+    col1, col2 = st.columns(2)
+    with col1:
+        deadline_days = st.number_input(
+            "Payment deadline (days from today)",
+            min_value=7, max_value=90, value=23, step=1,
+            key='lien_deadline_days'
+        )
+    with col2:
+        letter_date = date.today()
+        deadline_date = letter_date + timedelta(days=deadline_days)
+        st.markdown(f"**Letter date:** {letter_date.strftime('%B %d, %Y')}")
+        st.markdown(f"**Deadline:** {deadline_date.strftime('%B %d, %Y')}")
+
+    st.markdown("---")
+
+    # Generate button
+    logo_path = str(Path(__file__).parent.parent / 'assets' / 'lsr_logo.png')
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("Generate Letters", type="primary", use_container_width=True):
+            summary_rows = []
+            zip_buffer = io.BytesIO()
+
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                progress = st.progress(0)
+                total = len(parsed_df)
+
+                for idx, (_, row) in enumerate(parsed_df.iterrows()):
+                    row_dict = row.to_dict()
+                    customer = row_dict.get('customer_name') or 'Unknown'
+                    inv_num = row_dict.get('invoice_number') or 'NO_INV'
+                    inv_total = float(row_dict.get('invoice_total') or 0)
+                    address_parts = [
+                        row_dict.get('service_address') or '',
+                        row_dict.get('service_city') or '',
+                        row_dict.get('service_state') or '',
+                    ]
+                    address_str = ', '.join(p for p in address_parts if p)
+
+                    status = "Generated"
+                    try:
+                        docx_bytes = generate_letter(row_dict, letter_date, deadline_date, logo_path)
+                        docx_filename = make_letter_filename(customer, inv_num)
+                        zf.writestr(f"docx/{docx_filename}", docx_bytes.getvalue())
+
+                        # Try PDF conversion
+                        if pdf_available:
+                            pdf_result = convert_docx_to_pdf(docx_bytes, docx_filename.replace('.docx', '.pdf'))
+                            if pdf_result:
+                                pdf_filename = docx_filename.replace('.docx', '.pdf')
+                                zf.writestr(f"pdf/{pdf_filename}", pdf_result.getvalue())
+                    except Exception as e:
+                        status = f"Error: {e}"
+                        logger.error(f"Letter generation failed for row {idx+1}: {e}")
+
+                    summary_rows.append({
+                        '#': idx + 1,
+                        'Property': customer,
+                        'Address': address_str,
+                        'Invoice #': inv_num,
+                        'Amount': f"${inv_total:,.2f}",
+                        'Status': status,
+                    })
+
+                    progress.progress((idx + 1) / total)
+
+            zip_buffer.seek(0)
+            st.session_state.lien_generated_zip = zip_buffer.getvalue()
+            st.session_state.lien_generation_complete = True
+            st.session_state.lien_summary_df = pd.DataFrame(summary_rows)
+
+    # Results
+    if st.session_state.get('lien_generation_complete', False):
+        summary_df = st.session_state.lien_summary_df
+        n_success = len(summary_df[summary_df['Status'] == 'Generated'])
+        n_errors = len(summary_df[summary_df['Status'] != 'Generated'])
+        total_amount = parsed_df['invoice_total'].sum()
+
+        st.markdown("---")
+        st.success(f"Generated {len(summary_df)} letters ({n_success} successful, {n_errors} errors)")
+        st.markdown(f"**Total amount:** ${total_amount:,.2f}")
+        st.markdown(f"**Payment deadline:** {deadline_date.strftime('%B %d, %Y')}")
+
+        if n_errors > 0:
+            st.warning(f"{n_errors} letters had issues — see Status column below")
+
+        # Summary table
+        st.markdown("#### Letter Summary")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.caption(f"Total: {len(summary_df)} letters, ${total_amount:,.2f}")
+
+        # Download button
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.download_button(
+                label="Download All Letters (ZIP)",
+                data=st.session_state.lien_generated_zip,
+                file_name=f"Lien_Letters_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
 
 
 def main():

@@ -65,16 +65,19 @@ def inject_custom_css():
 
         /* Download buttons */
         .stDownloadButton > button {
-            background-color: #1E3A5F;
-            color: white;
+            background-color: #1E3A5F !important;
+            color: white !important;
             border: none;
             border-radius: 6px;
             font-weight: 600;
             padding: 0.5rem 1.5rem;
         }
         .stDownloadButton > button:hover {
-            background-color: #2a4f7a;
-            color: white;
+            background-color: #2a4f7a !important;
+            color: white !important;
+        }
+        .stDownloadButton > button p {
+            color: white !important;
         }
 
         /* File uploader */
