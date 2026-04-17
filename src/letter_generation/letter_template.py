@@ -174,9 +174,13 @@ def _is_blank(value) -> bool:
     return False
 
 
-def format_address_line_with_suite(address: str, suite) -> str:
-    """Combine address + suite as '{address}, {suite}' or just address when blank."""
-    addr = (address or '').strip()
+def format_address_line_with_suite(address, suite) -> str:
+    """Combine address + suite as '{address}, {suite}' or just address when blank.
+
+    Accepts None, NaN, or string-like inputs — defensive against raw pandas
+    values that haven't been normalized upstream.
+    """
+    addr = '' if _is_blank(address) else str(address).strip()
     if _is_blank(suite):
         return addr
     return f"{addr}, {str(suite).strip()}"
@@ -224,27 +228,35 @@ def generate_letter(row: dict, recipient_type: str, letter_date: date,
     style.paragraph_format.space_after = Pt(0)
     style.paragraph_format.space_before = Pt(0)
 
+    # NaN-safe getter: pandas row dicts can contain float('nan') for missing
+    # cells, and `value or ''` would return the NaN (NaN is truthy). Use
+    # `_is_blank` so empty/NaN always collapses to the default.
+    def _get(key, default=''):
+        v = row.get(key)
+        return default if _is_blank(v) else str(v).strip()
+
     # RE: block always references the Customer + service location, regardless
     # of which recipient the letter is addressed to.
-    customer_name = row.get('customer_name') or 'Unknown Property'
-    service_address = row.get('service_address') or ''
-    service_city = row.get('service_city') or ''
-    service_state = row.get('service_state') or ''
-    service_zip = row.get('service_zip') or ''
-    invoice_number = row.get('invoice_number') or 'NO_INV'
-    invoice_total = float(row.get('invoice_total') or 0)
+    customer_name = _get('customer_name', 'Unknown Property')
+    service_address = _get('service_address')
+    service_city = _get('service_city')
+    service_state = _get('service_state')
+    service_zip = _get('service_zip')
+    invoice_number = _get('invoice_number', 'NO_INV')
+    invoice_total_raw = row.get('invoice_total')
+    invoice_total = 0.0 if _is_blank(invoice_total_raw) else float(invoice_total_raw)
 
     service_city_state_zip = f"{service_city}, {service_state} {service_zip}".strip()
     full_location = f"{service_address}, {service_city_state_zip}"
 
     # Recipient-specific address block fields.
     fields = ADDRESS_FIELDS_BY_RECIPIENT[recipient_type]
-    recipient_name = row.get(fields['name']) or ''
-    recipient_address = row.get(fields['address']) or ''
+    recipient_name = _get(fields['name'])
+    recipient_address = _get(fields['address'])
     recipient_suite = row.get(fields['suite']) if fields['suite'] else None
-    recipient_city = row.get(fields['city']) or ''
-    recipient_state = row.get(fields['state']) or ''
-    recipient_zip = row.get(fields['zip']) or ''
+    recipient_city = _get(fields['city'])
+    recipient_state = _get(fields['state'])
+    recipient_zip = _get(fields['zip'])
 
     recipient_address_line = format_address_line_with_suite(
         recipient_address, recipient_suite

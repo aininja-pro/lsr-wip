@@ -129,28 +129,44 @@ def parse_invoice_spreadsheet(uploaded_file) -> Tuple[pd.DataFrame, List[str]]:
             "missing totals)."
         )
 
-    # Strip whitespace on string-ish columns, convert 'nan' back to None.
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].astype(str).str.strip()
-            df[col] = df[col].replace({'nan': None, 'None': None, '': None})
+    # Force every expected text column to str-or-None regardless of pandas'
+    # inferred dtype. Sparsely populated columns (e.g. all-blank suite columns)
+    # come back as float64/NaN, and downstream code can't call .strip() on those.
+    STRING_COLUMNS = [
+        'manager_name', 'manager_address', 'manager_suite',
+        'manager_city', 'manager_state', 'manager_zip',
+        'customer_name', 'service_address', 'service_city',
+        'service_state', 'service_zip',
+        'invoice_number',
+        'owner_name', 'owner_address', 'owner_suite',
+        'owner_city', 'owner_state', 'owner_zip',
+    ]
 
-    # Normalize invoice_number to string, strip trailing .0
-    df['invoice_number'] = (
-        df['invoice_number']
-        .astype(str)
-        .str.replace(r'\.0$', '', regex=True)
-        .replace({'nan': None, 'None': None})
-    )
+    def _to_clean_str(value):
+        if value is None:
+            return None
+        if isinstance(value, float) and pd.isna(value):
+            return None
+        s = str(value).strip()
+        if s == '' or s.lower() in ('nan', 'none'):
+            return None
+        return s
 
-    # Normalize zip codes — strings, preserve leading zeros.
+    for col in STRING_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].map(_to_clean_str)
+
+    # Strip trailing '.0' on invoice numbers (pandas reads integer-like IDs as floats).
+    if 'invoice_number' in df.columns:
+        df['invoice_number'] = df['invoice_number'].map(
+            lambda v: v[:-2] if isinstance(v, str) and v.endswith('.0') else v
+        )
+
+    # Same for zip codes — preserve leading zeros by keeping them as strings.
     for zip_col in ['service_zip', 'manager_zip', 'owner_zip']:
         if zip_col in df.columns:
-            df[zip_col] = (
-                df[zip_col]
-                .astype(str)
-                .str.replace(r'\.0$', '', regex=True)
-                .replace({'nan': None, 'None': None})
+            df[zip_col] = df[zip_col].map(
+                lambda v: v[:-2] if isinstance(v, str) and v.endswith('.0') else v
             )
 
     # Reset index so row numbers line up with enumerate().
