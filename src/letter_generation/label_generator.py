@@ -145,32 +145,16 @@ def _fill_label_cell(cell, text_lines: List[str]):
         run.font.size = LABEL_FONT_SIZE
 
 
-def _add_label_page(doc: Document, labels_on_page: List[List[str]]):
-    """Create a 10-row x 5-column table (3 label columns + 2 narrow gap columns)."""
-    # 5 columns: label, gap, label, gap, label
-    table = doc.add_table(rows=ROWS_PER_PAGE, cols=5)
-    table.autofit = False
-    _remove_all_borders(table)
-
-    # Set column widths.
-    col_widths = [LABEL_WIDTH, LABEL_HORIZONTAL_GAP, LABEL_WIDTH, LABEL_HORIZONTAL_GAP, LABEL_WIDTH]
-    for col_idx, width in enumerate(col_widths):
-        for row in table.rows:
-            row.cells[col_idx].width = width
-
-    # Pin each row to exactly 1" (twips = 1440 per inch).
-    for row in table.rows:
-        _set_row_exact_height(row, 1440)
-
-    # Populate.
-    label_cursor = 0
-    label_cols = [0, 2, 4]  # skip gap columns
-    for r in range(ROWS_PER_PAGE):
-        for c in label_cols:
-            if label_cursor < len(labels_on_page):
-                _fill_label_cell(table.rows[r].cells[c], labels_on_page[label_cursor])
-                _set_cell_margins(table.rows[r].cells[c])
-                label_cursor += 1
+def _remove_default_first_paragraph(doc: Document):
+    """python-docx creates an empty paragraph at the top of every document.
+    Even with 0pt spacing, that paragraph's line height still takes ~0.17"
+    — enough to push the 10th label row off the first page and cascade."""
+    if not doc.paragraphs:
+        return
+    p = doc.paragraphs[0]
+    parent = p._element.getparent()
+    if parent is not None:
+        parent.remove(p._element)
 
 
 def generate_labels(rows: pd.DataFrame) -> io.BytesIO:
@@ -196,6 +180,11 @@ def generate_labels(rows: pd.DataFrame) -> io.BytesIO:
     section.bottom_margin = PAGE_BOTTOM_MARGIN
     section.left_margin = PAGE_SIDE_MARGIN
     section.right_margin = PAGE_SIDE_MARGIN
+    # Word reserves header/footer zones inside the page by default (0.5" each).
+    # On an Avery 5160 sheet those zones cannibalize the last label row. Zero
+    # them so the body uses the full area between top and bottom margins.
+    section.header_distance = Inches(0)
+    section.footer_distance = Inches(0)
 
     # Default style: tight spacing.
     style = doc.styles['Normal']
@@ -205,19 +194,46 @@ def generate_labels(rows: pd.DataFrame) -> io.BytesIO:
     style.paragraph_format.space_before = Pt(0)
 
     if not labels:
-        # Return an empty but valid doc so callers don't have to special-case.
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)
         return buf
 
-    for page_idx in range(n_pages):
-        start = page_idx * LABELS_PER_PAGE
-        end = start + LABELS_PER_PAGE
-        page_labels = labels[start:end]
-        _add_label_page(doc, page_labels)
-        if page_idx < n_pages - 1:
-            doc.add_page_break()
+    # One continuous table spanning all pages. Word flows rows across pages
+    # automatically, so we don't risk a leading paragraph's line height
+    # displacing rows and pushing row 10 onto the next page.
+    total_rows = math.ceil(n_labels / LABELS_PER_ROW)
+    table = doc.add_table(rows=total_rows, cols=5)
+    table.autofit = False
+    _remove_all_borders(table)
+
+    # Column widths: label, gap, label, gap, label.
+    col_widths = [LABEL_WIDTH, LABEL_HORIZONTAL_GAP, LABEL_WIDTH,
+                  LABEL_HORIZONTAL_GAP, LABEL_WIDTH]
+    for col_idx, width in enumerate(col_widths):
+        for tr in table.rows:
+            tr.cells[col_idx].width = width
+
+    # Pin every label row to exactly 1" (1440 twips). Exact heights prevent
+    # Word from reflowing and keep the grid aligned with the Avery sheet.
+    for tr in table.rows:
+        _set_row_exact_height(tr, 1440)
+
+    # Populate left-to-right, top-to-bottom. Do NOT set cell margins:
+    # LibreOffice adds them on top of hRule="exact" row height, which pushes
+    # the 10th row off the first page and cascades to an extra page per sheet.
+    label_cols = [0, 2, 4]
+    label_cursor = 0
+    for r in range(total_rows):
+        for c in label_cols:
+            if label_cursor >= n_labels:
+                break
+            _fill_label_cell(table.rows[r].cells[c], labels[label_cursor])
+            label_cursor += 1
+
+    # Strip the default leading paragraph so the table starts flush with
+    # the top margin — otherwise the first page fits only 9 rows.
+    _remove_default_first_paragraph(doc)
 
     buf = io.BytesIO()
     doc.save(buf)
