@@ -26,6 +26,12 @@ from data_processing.merge_data import merge_wip_with_gl
 from data_processing.column_mapping import map_dataframe_columns
 from data_processing.letter_processing import parse_invoice_spreadsheet
 from letter_generation.letter_template import generate_letter, make_letter_filename
+from letter_generation.pdf_converter import convert_docx_to_pdf, is_libreoffice_available
+from letter_generation.label_generator import (
+    generate_labels,
+    count_labels,
+    count_label_pages,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -499,6 +505,15 @@ def render_lien_letters():
             summary_rows = []
             zip_buffer = io.BytesIO()
 
+            # Track per-type counts for the end-of-run summary.
+            counters = {
+                'customer_letters': 0,
+                'manager_letters': 0,
+                'owner_letters': 0,
+                'pdf_failures': 0,
+            }
+            pdf_available = is_libreoffice_available()
+
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 progress = st.progress(0)
                 total = len(parsed_df)
@@ -508,57 +523,148 @@ def render_lien_letters():
                     customer = row_dict.get('customer_name') or 'Unknown'
                     inv_num = row_dict.get('invoice_number') or 'NO_INV'
                     inv_total = float(row_dict.get('invoice_total') or 0)
-                    address_parts = [
-                        row_dict.get('service_address') or '',
-                        row_dict.get('service_city') or '',
-                        row_dict.get('service_state') or '',
-                    ]
-                    address_str = ', '.join(p for p in address_parts if p)
+                    manager_name = row_dict.get('manager_name') or ''
+                    owner_raw = row_dict.get('owner_name')
+                    owner_needed = bool(row_dict.get('owner_letter_needed'))
 
-                    status = "Generated"
-                    try:
-                        docx_bytes = generate_letter(row_dict, letter_date, deadline_date, logo_path)
-                        docx_filename = make_letter_filename(customer, inv_num)
-                        zf.writestr(f"docx/{docx_filename}", docx_bytes.getvalue())
+                    # Which recipients to generate for this row.
+                    recipients = ['Customer', 'Manager']
+                    if owner_needed:
+                        recipients.append('Owner')
 
-                        # Try PDF conversion
-                    except Exception as e:
-                        status = f"Error: {e}"
-                        logger.error(f"Letter generation failed for row {idx+1}: {e}")
+                    folder = f"{inv_num}/"
+                    row_errors = []
+                    for recipient in recipients:
+                        try:
+                            docx_buf = generate_letter(
+                                row_dict, recipient, letter_date, deadline_date, logo_path
+                            )
+                            docx_bytes = docx_buf.getvalue()
+                            docx_filename = make_letter_filename(
+                                customer, inv_num, recipient, 'docx'
+                            )
+                            zf.writestr(folder + docx_filename, docx_bytes)
+                            counters[f'{recipient.lower()}_letters'] += 1
 
+                            # PDF conversion (best-effort).
+                            if pdf_available:
+                                pdf_filename = make_letter_filename(
+                                    customer, inv_num, recipient, 'pdf'
+                                )
+                                pdf_buf = convert_docx_to_pdf(
+                                    io.BytesIO(docx_bytes), pdf_filename
+                                )
+                                if pdf_buf is not None:
+                                    zf.writestr(folder + pdf_filename, pdf_buf.getvalue())
+                                else:
+                                    counters['pdf_failures'] += 1
+                        except Exception as e:
+                            row_errors.append(f"{recipient}: {e}")
+                            logger.error(
+                                f"Letter generation failed for row {idx+1} "
+                                f"({recipient}): {e}"
+                            )
+
+                    # Owner display: actual name when complete; "—" otherwise.
+                    if owner_needed:
+                        owner_display = owner_raw or ''
+                    else:
+                        owner_display = '—'
+
+                    status = 'Generated' if not row_errors else f"Error: {'; '.join(row_errors)}"
                     summary_rows.append({
                         '#': idx + 1,
-                        'Property': customer,
-                        'Address': address_str,
                         'Invoice #': inv_num,
+                        'Property': customer,
+                        'Manager': manager_name,
+                        'Owner': owner_display,
                         'Amount': f"${inv_total:,.2f}",
+                        'Letters': len(recipients),
                         'Status': status,
                     })
 
                     progress.progress((idx + 1) / total)
 
+                # Mailing labels at ZIP root (one document for the whole batch).
+                label_errors = []
+                try:
+                    labels_docx = generate_labels(parsed_df)
+                    labels_docx_bytes = labels_docx.getvalue()
+                    zf.writestr('labels.docx', labels_docx_bytes)
+                    if pdf_available:
+                        labels_pdf = convert_docx_to_pdf(
+                            io.BytesIO(labels_docx_bytes), 'labels.pdf'
+                        )
+                        if labels_pdf is not None:
+                            zf.writestr('labels.pdf', labels_pdf.getvalue())
+                        else:
+                            counters['pdf_failures'] += 1
+                except Exception as e:
+                    label_errors.append(str(e))
+                    logger.error(f"Label generation failed: {e}")
+
             zip_buffer.seek(0)
             zip_bytes = zip_buffer.getvalue()
             st.session_state.lien_generated_zip = zip_bytes
-            st.session_state.lien_zip_filename = f"Lien_Letters_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            st.session_state.lien_zip_filename = (
+                f"Lien_Letters_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            )
             st.session_state.lien_generation_complete = True
             st.session_state.lien_summary_df = pd.DataFrame(summary_rows)
+            st.session_state.lien_counters = counters
+            st.session_state.lien_label_count = count_labels(parsed_df)
+            st.session_state.lien_label_pages = count_label_pages(parsed_df)
+            st.session_state.lien_label_errors = label_errors
+            st.session_state.lien_pdf_available = pdf_available
             logger.info(f"ZIP generated: {len(zip_bytes)} bytes")
 
     # Results
     if st.session_state.get('lien_generation_complete', False):
         summary_df = st.session_state.lien_summary_df
+        counters = st.session_state.get('lien_counters', {})
+        label_count = st.session_state.get('lien_label_count', 0)
+        label_pages = st.session_state.get('lien_label_pages', 0)
+        label_errors = st.session_state.get('lien_label_errors', [])
+        pdf_available = st.session_state.get('lien_pdf_available', False)
+
+        n_invoices = len(summary_df)
         n_success = len(summary_df[summary_df['Status'] == 'Generated'])
-        n_errors = len(summary_df[summary_df['Status'] != 'Generated'])
+        n_errors = n_invoices - n_success
+        n_cust = counters.get('customer_letters', 0)
+        n_mgr = counters.get('manager_letters', 0)
+        n_own = counters.get('owner_letters', 0)
+        n_letters_total = n_cust + n_mgr + n_own
         total_amount = parsed_df['invoice_total'].sum()
 
         st.markdown("---")
-        st.success(f"Generated {len(summary_df)} letters ({n_success} successful, {n_errors} errors)")
+        st.success(
+            f"Generated {n_letters_total} letters for {n_invoices} invoices "
+            f"({n_success} successful, {n_errors} errors)"
+        )
+        st.markdown(
+            f"- **Customer letters:** {n_cust}\n"
+            f"- **Manager letters:** {n_mgr}\n"
+            f"- **Owner letters:** {n_own}\n"
+            f"- **Labels:** {label_count} across {label_pages} page"
+            f"{'s' if label_pages != 1 else ''}"
+        )
         st.markdown(f"**Total amount:** ${total_amount:,.2f}")
         st.markdown(f"**Payment deadline:** {deadline_date.strftime('%B %d, %Y')}")
 
         if n_errors > 0:
-            st.warning(f"{n_errors} letters had issues — see Status column below")
+            st.warning(f"{n_errors} invoice(s) had issues — see Status column below")
+        if label_errors:
+            st.warning(f"Label generation error: {'; '.join(label_errors)}")
+        if not pdf_available:
+            st.info(
+                "PDF conversion unavailable (LibreOffice not installed). "
+                "The ZIP contains .docx files only."
+            )
+        elif counters.get('pdf_failures'):
+            st.warning(
+                f"{counters['pdf_failures']} PDF conversion(s) failed. "
+                "Those files are .docx only in the ZIP."
+            )
 
         # Download button — placed before table so it's immediately visible
         zip_data = st.session_state.get('lien_generated_zip')
@@ -577,7 +683,10 @@ def render_lien_letters():
         # Summary table
         st.markdown("#### Letter Summary")
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
-        st.caption(f"Total: {len(summary_df)} letters, ${total_amount:,.2f}")
+        st.caption(
+            f"Total: {n_letters_total} letters across {n_invoices} invoices, "
+            f"${total_amount:,.2f}"
+        )
 
 
 def main():

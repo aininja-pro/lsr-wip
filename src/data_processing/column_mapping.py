@@ -45,22 +45,93 @@ COLUMN_MAPPINGS = {
         'Total': ['Total', 'Total Cost', 'Grand Total', 'Sum']
     },
     'lien_invoice': {
+        # Phase 1 — retained (harmless if unused in Phase 2 format)
         'account_number': ['Account Number', 'Acct Number', 'Account #', 'Acct #'],
         'parent_account_name': ['Parent Account Name', 'Parent Account', 'Management Company'],
         'bill_to_address': ['Bill To Location Address 1', 'Bill To Address', 'Billing Address'],
         'bill_to_state': ['Bill To State/Province', 'Bill To State', 'Billing State'],
         'bill_to_zip': ['Bill To Zip/Post Code', 'Bill To Zip', 'Billing Zip'],
+        # Service / Customer
         'customer_name': ['Customer Name', 'Property Name', 'Property'],
         'service_address': ['Service Location Address 1', 'Service Address', 'Service Location Address'],
         'service_city': ['Service Location City', 'Service City'],
         'service_state': ['Service Location State/Province', 'Service State'],
         'service_zip': ['Service Location Zip/Post Code', 'Service Zip'],
+        # Invoice
         'invoice_date': ['Invoice Date', 'Inv Date'],
         'invoice_total': ['Invoice Total', 'Invoice Amount', 'Amount', 'Total'],
         'invoice_number': ['Invoice #', 'Invoice Number', 'Inv #', 'Inv Number'],
-        'owner': ['Owner', 'Property Owner']
+        # Manager (Phase 2 — new)
+        'manager_name': ['Parent Account', 'Parent Account Name', 'Management Company', 'Manager'],
+        'manager_address': ['Parent Account Address', 'Manager Address', 'Mgmt Address'],
+        'manager_suite': ['Manager Suite', 'Mgmt Suite'],
+        'manager_city': ['Manager City', 'Mgmt City'],
+        'manager_state': ['Manager State', 'Mgmt State'],
+        'manager_zip': ['Manager Zip', 'Manager Zip Code', 'Mgmt Zip'],
+        # Owner (Phase 2 — new)
+        'owner_name': ['Owner', 'Property Owner', 'Owner Name'],
+        'owner_address': ['Owner Address'],
+        'owner_suite': ['Owner Suite'],
+        'owner_city': ['Owner City'],
+        'owner_state': ['Owner State'],
+        'owner_zip': ['Owner Zip', 'Owner Zip Code']
     }
 }
+
+
+# Phase 2 spreadsheet has a fixed column order with duplicate header names
+# ("State", "Zip Code", "Suite", "City" each appear three times). Positional
+# mapping is the authoritative source of truth — fuzzy matching alone cannot
+# disambiguate these.
+#
+# Position → canonical name (per blueprint_update_phase2.md Change 1).
+LIEN_INVOICE_POSITIONAL = [
+    'manager_name',      # A
+    'manager_address',   # B
+    'manager_suite',     # C
+    'manager_city',      # D
+    'manager_state',     # E
+    'manager_zip',       # F
+    'customer_name',     # G
+    'service_address',   # H
+    'service_city',      # I
+    'service_state',     # J
+    'service_zip',       # K
+    'invoice_number',    # L
+    'invoice_date',      # M
+    'invoice_total',     # N
+    'owner_name',        # O
+    'owner_address',     # P
+    'owner_suite',       # Q
+    'owner_city',        # R
+    'owner_state',       # S
+    'owner_zip',         # T
+]
+
+
+def map_columns_by_position(df, positional_spec: Optional[List[str]] = None) -> Dict[str, str]:
+    """
+    Build a rename mapping from current column names to canonical names using
+    column position instead of column label.
+
+    Args:
+        df: pandas DataFrame whose columns are in the expected positional order
+        positional_spec: list of canonical names indexed by column position
+                         (defaults to LIEN_INVOICE_POSITIONAL)
+
+    Returns:
+        Dict[str, str]: {current_column_name: canonical_name} for each position
+        that exists in the DataFrame. Extra columns beyond the spec are ignored.
+    """
+    if positional_spec is None:
+        positional_spec = LIEN_INVOICE_POSITIONAL
+
+    rename_map: Dict[str, str] = {}
+    current_cols = list(df.columns)
+    for idx, canonical in enumerate(positional_spec):
+        if idx < len(current_cols):
+            rename_map[current_cols[idx]] = canonical
+    return rename_map
 
 
 def get_similarity_score(str1: str, str2: str) -> float:

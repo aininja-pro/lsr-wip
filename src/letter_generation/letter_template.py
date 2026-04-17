@@ -116,21 +116,83 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[^\w\-]', '', name)
 
 
-def make_letter_filename(customer_name: str, invoice_number: str) -> str:
-    """Generate the filename for a lien notice letter."""
+def make_letter_filename(customer_name: str, invoice_number: str,
+                         recipient_type: str = 'Customer',
+                         extension: str = 'docx') -> str:
+    """Generate the filename for a lien notice letter.
+
+    Format: Lien_Notice_{customer_name}_{invoice_number}_{recipient_type}.{ext}
+    """
     safe_name = sanitize_filename(customer_name or 'Unknown')
     safe_inv = sanitize_filename(invoice_number or 'NO_INV')
-    return f"Lien_Notice_{safe_name}_{safe_inv}.docx"
+    safe_type = sanitize_filename(recipient_type or 'Customer') or 'Customer'
+    return f"Lien_Notice_{safe_name}_{safe_inv}_{safe_type}.{extension}"
 
 
-def generate_letter(row: dict, letter_date: date, deadline_date: date,
-                    logo_path: str) -> io.BytesIO:
+# Map recipient_type to the row-dict keys that describe their address block.
+# Customer has no suite field; Manager and Owner do.
+ADDRESS_FIELDS_BY_RECIPIENT = {
+    'Customer': {
+        'name': 'customer_name',
+        'address': 'service_address',
+        'suite': None,
+        'city': 'service_city',
+        'state': 'service_state',
+        'zip': 'service_zip',
+    },
+    'Manager': {
+        'name': 'manager_name',
+        'address': 'manager_address',
+        'suite': 'manager_suite',
+        'city': 'manager_city',
+        'state': 'manager_state',
+        'zip': 'manager_zip',
+    },
+    'Owner': {
+        'name': 'owner_name',
+        'address': 'owner_address',
+        'suite': 'owner_suite',
+        'city': 'owner_city',
+        'state': 'owner_state',
+        'zip': 'owner_zip',
+    },
+}
+
+
+def _is_blank(value) -> bool:
+    """Return True for None, NaN, empty/whitespace-only strings."""
+    if value is None:
+        return True
+    try:
+        import math
+        if isinstance(value, float) and math.isnan(value):
+            return True
+    except Exception:
+        pass
+    if isinstance(value, str) and value.strip() == '':
+        return True
+    return False
+
+
+def format_address_line_with_suite(address: str, suite) -> str:
+    """Combine address + suite as '{address}, {suite}' or just address when blank."""
+    addr = (address or '').strip()
+    if _is_blank(suite):
+        return addr
+    return f"{addr}, {str(suite).strip()}"
+
+
+def generate_letter(row: dict, recipient_type: str, letter_date: date,
+                    deadline_date: date, logo_path: str) -> io.BytesIO:
     """
     Generate a single pre-lien notice letter as a .docx file.
 
     Args:
-        row: dict with keys: customer_name, service_address, service_city,
-             service_state, service_zip, invoice_number, invoice_total
+        row: dict with canonical Phase 2 keys (customer_name, service_*,
+             manager_*, owner_*, invoice_number, invoice_total, ...)
+        recipient_type: "Customer", "Manager", or "Owner" — selects the
+             address block fields. Everything else in the letter is identical
+             across variants.
         letter_date: date to print on the letter
         deadline_date: payment deadline date
         logo_path: path to lsr_logo.png
@@ -138,6 +200,11 @@ def generate_letter(row: dict, letter_date: date, deadline_date: date,
     Returns:
         BytesIO containing the .docx file
     """
+    if recipient_type not in ADDRESS_FIELDS_BY_RECIPIENT:
+        raise ValueError(
+            f"recipient_type must be one of "
+            f"{sorted(ADDRESS_FIELDS_BY_RECIPIENT)}, got {recipient_type!r}"
+        )
     doc = Document()
 
     # Page setup: US Letter, 1" margins
@@ -157,7 +224,8 @@ def generate_letter(row: dict, letter_date: date, deadline_date: date,
     style.paragraph_format.space_after = Pt(0)
     style.paragraph_format.space_before = Pt(0)
 
-    # Extract fields with fallbacks
+    # RE: block always references the Customer + service location, regardless
+    # of which recipient the letter is addressed to.
     customer_name = row.get('customer_name') or 'Unknown Property'
     service_address = row.get('service_address') or ''
     service_city = row.get('service_city') or ''
@@ -166,8 +234,24 @@ def generate_letter(row: dict, letter_date: date, deadline_date: date,
     invoice_number = row.get('invoice_number') or 'NO_INV'
     invoice_total = float(row.get('invoice_total') or 0)
 
-    city_state_zip = f"{service_city}, {service_state} {service_zip}".strip()
-    full_location = f"{service_address}, {city_state_zip}"
+    service_city_state_zip = f"{service_city}, {service_state} {service_zip}".strip()
+    full_location = f"{service_address}, {service_city_state_zip}"
+
+    # Recipient-specific address block fields.
+    fields = ADDRESS_FIELDS_BY_RECIPIENT[recipient_type]
+    recipient_name = row.get(fields['name']) or ''
+    recipient_address = row.get(fields['address']) or ''
+    recipient_suite = row.get(fields['suite']) if fields['suite'] else None
+    recipient_city = row.get(fields['city']) or ''
+    recipient_state = row.get(fields['state']) or ''
+    recipient_zip = row.get(fields['zip']) or ''
+
+    recipient_address_line = format_address_line_with_suite(
+        recipient_address, recipient_suite
+    )
+    recipient_city_state_zip = (
+        f"{recipient_city}, {recipient_state} {recipient_zip}".strip()
+    )
 
     # 1. Logo
     logo = Path(logo_path)
@@ -181,12 +265,13 @@ def generate_letter(row: dict, letter_date: date, deadline_date: date,
     # 2. Date (bold)
     _add_paragraph(doc, _format_date(letter_date), bold=True, space_after=SECTION_BREAK)
 
-    # 3. Recipient address block (tight — no spacing between lines)
-    _add_paragraph(doc, customer_name)
-    _add_paragraph(doc, service_address)
-    _add_paragraph(doc, city_state_zip, space_after=SECTION_BREAK)
+    # 3. Recipient address block (tight — no spacing between lines).
+    # Suite, when present, sits on the same line as the address, comma-separated.
+    _add_paragraph(doc, recipient_name)
+    _add_paragraph(doc, recipient_address_line)
+    _add_paragraph(doc, recipient_city_state_zip, space_after=SECTION_BREAK)
 
-    # 4. RE: block (tight within, gap after)
+    # 4. RE: block (always references the customer/service location)
     _add_paragraph(doc, 'RE:', bold=True)
     _add_paragraph(doc, f'Property: {customer_name}')
     _add_paragraph(doc, f'Location: {full_location}', space_after=SECTION_BREAK)
